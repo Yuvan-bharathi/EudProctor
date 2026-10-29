@@ -1,4 +1,4 @@
-import type { ClientEvent, FlagStatus } from "./config";
+﻿import type { ClientEvent, FlagStatus } from "./config";
 
 /** Batches proctoring events every 2 s with an IndexedDB buffer for offline periods. Idempotent per event id. */
 

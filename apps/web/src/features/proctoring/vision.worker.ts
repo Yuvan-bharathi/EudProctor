@@ -1,4 +1,4 @@
-/// <reference lib="webworker" />
+﻿/// <reference lib="webworker" />
 /**
  * MediaPipe Face Landmarker in a Web Worker. Receives ImageBitmap frames (~10 fps, never queued) and returns
  * numeric signals only. Frames never leave the device.

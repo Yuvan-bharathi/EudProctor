@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Proctoring tab of the assessment workspace (mentor only).
  *
  * One card per candidate with their proctoring summary; a dropdown expands the full timeline with evidence and

@@ -1,4 +1,4 @@
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+﻿import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { faceBox, type Point } from "./geometry";
 
 export const FACE_MODEL_URL =

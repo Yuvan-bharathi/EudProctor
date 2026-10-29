@@ -1,4 +1,4 @@
-import { classify } from "./classify";
+﻿import { classify } from "./classify";
 import type { ClientEvent, ProctoringConfig } from "./config";
 import { type LookState, ongoingMs, step } from "./lookAway";
 import { autoCalibration, awayFrom, type Calibration, type FrameSignals, Smoother } from "./signals";

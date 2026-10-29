@@ -64,7 +64,7 @@ export function useAuth() {
 export const roleHome: Record<Role, string> = {
   admin: "/admin",
   mentor: "/mentor",
-  candidate: "/candidate",
+  candidate: "/candidate/assessments",
 };
 
 export const roleLabel: Record<Role, string> = {

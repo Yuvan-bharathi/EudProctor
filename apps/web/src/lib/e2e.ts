@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Playwright E2E hooks. Enabled only when the app is built/served with VITE_E2E=1 (never in production builds):
  * the camera and vision worker are replaced by a scripted signal source the test controls via window.__e2eVision.
  */

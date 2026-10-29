@@ -1,4 +1,4 @@
-import type { ClientEvent, ProctoringConfig } from "./config";
+﻿import type { ClientEvent, ProctoringConfig } from "./config";
 import { watchIntegrity } from "./integrity";
 import { ProctorMonitor } from "./monitor";
 import type { Calibration, FrameSignals } from "./signals";

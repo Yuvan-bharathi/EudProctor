@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   Award,
@@ -29,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
@@ -39,7 +40,6 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { CoursePicker } from "@/features/mentor/CoursePicker";
-import { ProctoringTab } from "@/features/proctoring/ProctoringTab";
 import {
   type AIQuestionSuggestion,
   convertAIQuestionsToQuestions,
@@ -58,7 +58,6 @@ import {
 import {
   getPersistedAssessments,
   mockAssignmentsList,
-  mockCandidatesList,
   type LiveCandidateRow,
   mockLiveCandidates,
   mockQuestionsList,
@@ -67,7 +66,7 @@ import {
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
 
-export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings" | "proctoring";
+export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings";
 
 interface AssessmentWorkspaceProps {
   initialTab?: WorkspaceTab;
@@ -75,6 +74,8 @@ interface AssessmentWorkspaceProps {
 
 export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorkspaceProps) {
   const { examId = "ut-3" } = useParams();
+  const location = useLocation();
+  const isLocationAdmin = location.pathname.startsWith("/admin");
   const qc = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab);
@@ -212,11 +213,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   // State for candidate removal confirmation
   const [candidateToRemove, setCandidateToRemove] = useState<Assignment | null>(null);
 
-  // State for adding candidate modal
+  // State for adding candidate form modal
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
-  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
-  const [addSearch, setAddSearch] = useState("");
-  const [autoSendLinks, setAutoSendLinks] = useState(true);
+  const [candFullName, setCandFullName] = useState("");
+  const [candEmail, setCandEmail] = useState("");
+  const [candPhone, setCandPhone] = useState("");
+  const [candRollNumber, setCandRollNumber] = useState("");
+  const [candBatch, setCandBatch] = useState("Batch 2026 · Campus Drive");
+  const [candTargetRole, setCandTargetRole] = useState("Full Stack Developer (MERN)");
+  const [candAutoSend, setCandAutoSend] = useState(true);
+  const [candFormError, setCandFormError] = useState<string | null>(null);
 
   // Subview toggle in Candidates tab: "roster" vs "telemetry"
   const [candidateSubView, setCandidateSubView] = useState<"roster" | "telemetry">("roster");
@@ -287,18 +293,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     });
   }, [assignments, candidateSearch, candidateStatusFilter]);
 
-  // Cohort candidates eligible to be added
-  const assignedCandidateIds = useMemo(() => new Set(assignments.map((a) => a.candidate_id)), [assignments]);
-
-  const eligibleCohortStudents = useMemo(() => {
-    return mockCandidatesList.filter((c) => {
-      const q = addSearch.toLowerCase();
-      const matchesSearch = c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q);
-      const isNotAlreadyAdded = !assignedCandidateIds.has(c.id);
-      return matchesSearch && isNotAlreadyAdded;
-    });
-  }, [addSearch, assignedCandidateIds]);
-
   // Live monitor filtered list
   const liveCandidates: LiveCandidateRow[] = mockLiveCandidates;
   const filteredLiveCandidates = useMemo(() => {
@@ -320,48 +314,69 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     },
   });
 
-  // Candidate Actions: Add
-  const handleToggleStudentSelection = (id: string) => {
-    setSelectedStudentIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const handleConfirmAddStudents = (e: FormEvent) => {
+  // Candidate Actions: Add via Validated Input Form
+  const handleCreateCandidate = (e: FormEvent) => {
     e.preventDefault();
-    if (selectedStudentIds.size === 0) return;
+    setCandFormError(null);
 
-    const newAssignments: Assignment[] = [];
-    for (const studentId of selectedStudentIds) {
-      const student = mockCandidatesList.find((c) => c.id === studentId);
-      if (student) {
-        newAssignments.push({
-          id: `asg-${Date.now()}-${student.id}`,
-          candidate_id: student.id,
-          candidate_name: student.name,
-          candidate_email: student.email,
-          link_sent_at: autoSendLinks ? new Date().toISOString() : null,
-          link_used_at: null,
-          link_expires_at: new Date(Date.now() + 864e5).toISOString(),
-          accommodations: {},
-          status: "Not started",
-          score_pct: null,
-          flags: 0,
-          glances: 0,
-          session_id: `s-${student.id}`,
-        });
-      }
+    const name = candFullName.trim();
+    const email = candEmail.trim().toLowerCase();
+    const phone = candPhone.trim();
+    const roll = candRollNumber.trim();
+
+    if (!name) {
+      setCandFormError("Candidate Full Name is required.");
+      return;
+    }
+    if (!email || !email.includes("@") || !email.includes(".")) {
+      setCandFormError("Please enter a valid email address.");
+      return;
+    }
+    if (!phone || phone.replace(/\D/g, "").length < 10) {
+      setCandFormError("Please enter a valid mobile number (at least 10 digits).");
+      return;
+    }
+    if (!roll) {
+      setCandFormError("Candidate Roll Number / ID is required.");
+      return;
     }
 
-    const updatedAssignments = [...assignments, ...newAssignments];
+    const emailExists = assignments.some((a) => a.candidate_email.toLowerCase() === email);
+    if (emailExists) {
+      setCandFormError(`A candidate with email "${email}" is already enrolled in this assessment.`);
+      return;
+    }
+
+    const newCandidate: Assignment = {
+      id: `asg-${Date.now()}`,
+      candidate_id: `cand-${Date.now()}`,
+      candidate_name: name,
+      candidate_email: email,
+      candidate_phone: phone,
+      link_sent_at: candAutoSend ? new Date().toISOString() : null,
+      link_used_at: null,
+      link_expires_at: new Date(Date.now() + 7 * 864e5).toISOString(),
+      accommodations: {},
+      status: "Not started",
+      score_pct: null,
+      flags: 0,
+      glances: 0,
+      session_id: `s-${Date.now()}`,
+    };
+
+    const updatedAssignments = [newCandidate, ...assignments];
     setAssignments(updatedAssignments);
     saveExamDetailToStorage(examId, { assignments: updatedAssignments });
-    setSelectedStudentIds(new Set());
+
+    // Reset Form
+    setCandFullName("");
+    setCandEmail("");
+    setCandPhone("");
+    setCandRollNumber("");
+    setCandFormError(null);
     setAddStudentModalOpen(false);
-    showToast(`Added ${newAssignments.length} student(s) to this assessment.`);
+
+    showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
   };
 
   // Candidate Actions: Remove (CRUD)
@@ -650,36 +665,45 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {assessmentStatus === "draft" && (
-            <Button
-              onClick={() => setPublishModalOpen(true)}
-              className="flex items-center gap-2 bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 cursor-pointer"
-            >
-              <Send className="size-3.5" />
-              <span>Publish & Schedule</span>
-            </Button>
-          )}
+          {isLocationAdmin ? (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-muted px-3 py-1.5 text-xs font-semibold text-muted">
+              <ShieldCheck className="size-3.5 text-primary-600" />
+              <span>Admin Audit Mode (Read-Only)</span>
+            </span>
+          ) : (
+            <>
+              {assessmentStatus === "draft" && (
+                <Button
+                  onClick={() => setPublishModalOpen(true)}
+                  className="flex items-center gap-2 bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 cursor-pointer"
+                >
+                  <Send className="size-3.5" />
+                  <span>Publish & Schedule</span>
+                </Button>
+              )}
 
-          {assessmentStatus === "scheduled" && (
-            <Button
-              variant="secondary"
-              onClick={() => setPublishModalOpen(true)}
-              className="flex items-center gap-1.5 border-blue-200 bg-blue-50/60 text-xs font-semibold text-blue-800 hover:bg-blue-100 cursor-pointer"
-            >
-              <Calendar className="size-3.5 text-blue-600" />
-              <span>Reschedule / Re-send Links</span>
-            </Button>
-          )}
+              {assessmentStatus === "scheduled" && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setPublishModalOpen(true)}
+                  className="flex items-center gap-1.5 border-blue-200 bg-blue-50/60 text-xs font-semibold text-blue-800 hover:bg-blue-100 cursor-pointer"
+                >
+                  <Calendar className="size-3.5 text-blue-600" />
+                  <span>Reschedule / Re-send Links</span>
+                </Button>
+              )}
 
-          {assessmentStatus === "live" && (
-            <Button
-              variant="secondary"
-              onClick={() => setActiveTab("candidates")}
-              className="flex items-center gap-1.5 border-emerald-200 bg-emerald-50/60 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-            >
-              <Radio className="size-3.5 text-emerald-600 animate-pulse" />
-              <span>Live Screening Active</span>
-            </Button>
+              {assessmentStatus === "live" && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setActiveTab("candidates")}
+                  className="flex items-center gap-1.5 border-emerald-200 bg-emerald-50/60 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
+                >
+                  <Radio className="size-3.5 text-emerald-600 animate-pulse" />
+                  <span>Live Screening Active</span>
+                </Button>
+              )}
+            </>
           )}
 
           <Button
@@ -701,7 +725,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           { key: "questions", label: `Questions (${questions.length})` },
           { key: "candidates", label: `Candidates & Telemetry (${assignments.length})` },
           { key: "settings", label: "Settings" },
-          { key: "proctoring", label: "Proctoring" },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -857,45 +880,53 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={downloadSampleQuestionsTemplate}
-                className="gap-1.5 text-xs shadow-2xs"
-                title="Download an Excel .xlsx question template"
-              >
-                <Download className="size-3.5" />
-                <span>Template</span>
-              </Button>
+              {isLocationAdmin ? (
+                <span className="rounded-full bg-surface-muted px-3 py-1 text-xs font-semibold text-muted border border-border">
+                  Question Bank Audit (Admin Read-Only)
+                </span>
+              ) : (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={downloadSampleQuestionsTemplate}
+                    className="gap-1.5 text-xs shadow-2xs"
+                    title="Download an Excel .xlsx question template"
+                  >
+                    <Download className="size-3.5" />
+                    <span>Template</span>
+                  </Button>
 
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleOpenExcelModal}
-                className="gap-1.5 text-xs text-primary-700 shadow-2xs hover:text-primary-800"
-              >
-                <FileSpreadsheet className="size-3.5 text-success-600" />
-                <span>Upload Excel / CSV</span>
-              </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleOpenExcelModal}
+                    className="gap-1.5 text-xs text-primary-700 shadow-2xs hover:text-primary-800"
+                  >
+                    <FileSpreadsheet className="size-3.5 text-success-600" />
+                    <span>Upload Excel / CSV</span>
+                  </Button>
 
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleOpenAiModal}
-                className="gap-1.5 text-xs font-semibold text-ai-700 shadow-2xs hover:bg-ai-50"
-              >
-                <Sparkles className="size-3.5 text-ai-600" />
-                <span>AI Recommend</span>
-              </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleOpenAiModal}
+                    className="gap-1.5 text-xs font-semibold text-ai-700 shadow-2xs hover:bg-ai-50"
+                  >
+                    <Sparkles className="size-3.5 text-ai-600" />
+                    <span>AI Recommend</span>
+                  </Button>
 
-              <Button
-                size="sm"
-                onClick={handleOpenAddCustomQuestion}
-                className="gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
-              >
-                <Plus className="size-4" />
-                <span>Add Question</span>
-              </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleOpenAddCustomQuestion}
+                    className="gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
+                  >
+                    <Plus className="size-4" />
+                    <span>Add Question</span>
+                  </Button>
+                </>
+              )}
             </div>
           </div>
 
@@ -938,25 +969,27 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       <p className="text-sm font-semibold text-text pt-1">{q.body}</p>
                     </div>
 
-                    {/* Question Actions: Edit & Delete */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditQuestion(q)}
-                        className="rounded-lg p-1.5 text-muted hover:bg-surface-muted hover:text-text transition-colors"
-                        title="Edit question"
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteQuestion(q.id)}
-                        className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors"
-                        title="Delete question"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
+                    {/* Question Actions: Edit & Delete (Mentor only) */}
+                    {!isLocationAdmin && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditQuestion(q)}
+                          className="rounded-lg p-1.5 text-muted hover:bg-surface-muted hover:text-text transition-colors"
+                          title="Edit question"
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteQuestion(q.id)}
+                          className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors"
+                          title="Delete question"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* 4 Options Preview */}
@@ -1074,35 +1107,43 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
             {candidateSubView === "roster" && (
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setCandidateExcelModalOpen(true)}
-                  className="flex items-center gap-1.5 text-xs border-border shadow-2xs text-text hover:bg-surface-muted"
-                >
-                  <FileSpreadsheet className="size-3.5 text-success-600" />
-                  <span>Import from Excel</span>
-                </Button>
+                {isLocationAdmin ? (
+                  <span className="rounded-full bg-surface-muted px-3 py-1 text-xs font-semibold text-muted border border-border">
+                    Candidate Roster Audit (Admin Read-Only)
+                  </span>
+                ) : (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setCandidateExcelModalOpen(true)}
+                      className="flex items-center gap-1.5 text-xs border-border shadow-2xs text-text hover:bg-surface-muted"
+                    >
+                      <FileSpreadsheet className="size-3.5 text-success-600" />
+                      <span>Import from Excel</span>
+                    </Button>
 
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => sendLinksMutation.mutate()}
-                  disabled={sendLinksMutation.isPending || assignments.length === 0}
-                  className="gap-1.5 text-xs shadow-2xs"
-                >
-                  <Send className="size-3.5 text-primary-600" />
-                  <span>{sendLinksMutation.isPending ? "Sending..." : "Dispatch Links"}</span>
-                </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => sendLinksMutation.mutate()}
+                      disabled={sendLinksMutation.isPending || assignments.length === 0}
+                      className="gap-1.5 text-xs shadow-2xs"
+                    >
+                      <Send className="size-3.5 text-primary-600" />
+                      <span>{sendLinksMutation.isPending ? "Sending..." : "Dispatch Links"}</span>
+                    </Button>
 
-                <Button
-                  size="sm"
-                  onClick={() => setAddStudentModalOpen(true)}
-                  className="flex items-center gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
-                >
-                  <Plus className="size-4" />
-                  <span>Add candidate</span>
-                </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => setAddStudentModalOpen(true)}
+                      className="flex items-center gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
+                    >
+                      <Plus className="size-4" />
+                      <span>Add candidate</span>
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -1272,9 +1313,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                     size="sm"
                                     className="gap-1 text-xs font-semibold bg-primary-600 text-white hover:bg-primary-700 h-8"
                                   >
-                                    <Link to={`/mentor/sessions/${a.session_id ?? "s1"}/summary?examId=${examId}`}>
-                                      <Sparkles className="size-3.5" />
-                                      <span>AI Summary & Publish</span>
+                                    <Link to={`/mentor/sessions/${a.session_id ?? "s1"}/result`}>
+                                      <span>View Result</span>
                                     </Link>
                                   </Button>
                                 )}
@@ -1291,14 +1331,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                   </Link>
                                 </Button>
 
-                                <button
-                                  type="button"
-                                  onClick={() => setCandidateToRemove(a)}
-                                  className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors cursor-pointer"
-                                  title="Remove candidate from assessment"
-                                >
-                                  <Trash2 className="size-3.5" />
-                                </button>
+                                {!isLocationAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCandidateToRemove(a)}
+                                    className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors cursor-pointer"
+                                    title="Remove candidate from assessment"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </TD>
                           </TR>
@@ -1449,10 +1491,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
       )}
 
-      {/* TAB 5: SETTINGS */}
-      {/* TAB 5: PROCTORING */}
-      {activeTab === "proctoring" && <ProctoringTab examId={examId} assignments={assignments} />}
-
+      {/* TAB 4: SETTINGS */}
       {activeTab === "settings" && (
         <div className="space-y-6 animate-in fade-in">
           <Card className="p-6 shadow-2xs space-y-5">
@@ -1975,7 +2014,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
       )}
 
-      {/* MODAL 4: ADD STUDENT TO ASSESSMENT */}
+      {/* MODAL 4: ENROLL NEW CANDIDATE FORM */}
       {addStudentModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-text/40 p-4 backdrop-blur-2xs"
@@ -1985,91 +2024,156 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           <div className="w-full max-w-lg space-y-4 rounded-2xl border border-border bg-surface p-6 shadow-2xl animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
-                <h3 className="text-base font-bold text-text">Add Students to Assessment</h3>
-                <p className="text-xs text-muted">Select candidates from {courseName} cohort to assign.</p>
+                <h3 className="text-base font-bold text-text">Enroll New Candidate</h3>
+                <p className="text-xs text-muted">Enter required candidate details to assign them to this assessment.</p>
               </div>
               <button
                 type="button"
-                onClick={() => setAddStudentModalOpen(false)}
-                className="rounded-lg p-1.5 text-muted hover:text-text"
+                onClick={() => {
+                  setCandFormError(null);
+                  setAddStudentModalOpen(false);
+                }}
+                className="rounded-lg p-1.5 text-muted hover:text-text cursor-pointer"
               >
                 <X className="size-4" />
               </button>
             </div>
 
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
-              <input
-                type="text"
-                placeholder="Search eligible candidates by name or email..."
-                value={addSearch}
-                onChange={(e) => setAddSearch(e.target.value)}
-                className="h-9 w-full rounded-lg border border-border bg-surface-muted pl-9 pr-3 text-xs text-text placeholder:text-muted focus:border-primary-500 focus:bg-surface focus:outline-hidden"
-              />
-            </div>
+            {candFormError && (
+              <div className="rounded-lg border border-danger-200 bg-danger-50 p-2.5 text-xs font-medium text-danger-800 flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0 text-danger-600" />
+                <span>{candFormError}</span>
+              </div>
+            )}
 
-            <form onSubmit={handleConfirmAddStudents} className="space-y-4">
-              <div className="max-h-60 overflow-y-auto rounded-xl border border-border divide-y divide-border">
-                {eligibleCohortStudents.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-muted">
-                    All eligible students from this cohort are already assigned.
+            <form onSubmit={handleCreateCandidate} className="space-y-4">
+              <div className="space-y-3">
+                {/* Full Name */}
+                <div>
+                  <Label className="text-xs font-semibold text-text mb-1 block">
+                    Candidate Full Name <span className="text-danger-600">*</span>
+                  </Label>
+                  <Input
+                    type="text"
+                    required
+                    placeholder="e.g. Rahul Sharma"
+                    value={candFullName}
+                    onChange={(e) => setCandFullName(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+
+                {/* Email and Mobile Number Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-text mb-1 block">
+                      Email Address <span className="text-danger-600">*</span>
+                    </Label>
+                    <Input
+                      type="email"
+                      required
+                      placeholder="e.g. rahul.sharma@example.com"
+                      value={candEmail}
+                      onChange={(e) => setCandEmail(e.target.value)}
+                      className="h-9 text-xs"
+                    />
                   </div>
-                ) : (
-                  eligibleCohortStudents.map((st) => {
-                    const isChecked = selectedStudentIds.has(st.id);
-                    return (
-                      <label
-                        key={st.id}
-                        className="flex cursor-pointer items-center justify-between p-3 hover:bg-surface-muted transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => handleToggleStudentSelection(st.id)}
-                            className="size-4 rounded accent-primary-600"
-                          />
-                          <div>
-                            <div className="font-semibold text-xs text-text">{st.name}</div>
-                            <div className="font-mono text-[11px] text-muted">
-                              {st.email} • {st.phone || "+91 98765 43210"}
-                            </div>
-                          </div>
-                        </div>
-                        <Badge tone="primary">{courseName}</Badge>
-                      </label>
-                    );
-                  })
-                )}
+
+                  <div>
+                    <Label className="text-xs font-semibold text-text mb-1 block">
+                      Mobile Number <span className="text-danger-600">*</span>
+                    </Label>
+                    <Input
+                      type="tel"
+                      required
+                      placeholder="e.g. +91 98765 43210"
+                      value={candPhone}
+                      onChange={(e) => setCandPhone(e.target.value)}
+                      className="h-9 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Roll Number and Batch */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-text mb-1 block">
+                      Roll Number / ID <span className="text-danger-600">*</span>
+                    </Label>
+                    <Input
+                      type="text"
+                      required
+                      placeholder="e.g. EP-2026-CS-088"
+                      value={candRollNumber}
+                      onChange={(e) => setCandRollNumber(e.target.value)}
+                      className="h-9 text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-text mb-1 block">
+                      Batch / Cohort
+                    </Label>
+                    <select
+                      value={candBatch}
+                      onChange={(e) => setCandBatch(e.target.value)}
+                      className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
+                    >
+                      <option value="Batch 2026 · Campus Drive">Batch 2026 · Campus Drive</option>
+                      <option value="Batch 2026 · Lateral Hires">Batch 2026 · Lateral Hires</option>
+                      <option value="Batch 2025 · Winter Interns">Batch 2025 · Winter Interns</option>
+                      <option value="Batch 2025 · Full Stack Cohort">Batch 2025 · Full Stack Cohort</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Target Role */}
+                <div>
+                  <Label className="text-xs font-semibold text-text mb-1 block">
+                    Target Role / Technology Stack
+                  </Label>
+                  <select
+                    value={candTargetRole}
+                    onChange={(e) => setCandTargetRole(e.target.value)}
+                    className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
+                  >
+                    <option value="Full Stack Developer (MERN)">Full Stack Developer (MERN)</option>
+                    <option value="Frontend Developer">Frontend Developer</option>
+                    <option value="Backend Developer">Backend Developer</option>
+                    <option value="Data Analyst">Data Analyst</option>
+                    <option value="AI/ML Engineer">AI/ML Engineer</option>
+                  </select>
+                </div>
+
+                {/* Dispatch test link checkbox */}
+                <label className="flex items-center gap-2 text-xs text-text cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={candAutoSend}
+                    onChange={(e) => setCandAutoSend(e.target.checked)}
+                    className="size-4 rounded accent-primary-600"
+                  />
+                  <span>Dispatch secure test link and webcam instructions to candidate upon enrollment</span>
+                </label>
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-text cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoSendLinks}
-                  onChange={(e) => setAutoSendLinks(e.target.checked)}
-                  className="size-4 rounded accent-primary-600"
-                />
-                <span>Automatically generate and dispatch single-use test links to selected students</span>
-              </label>
-
-              <div className="flex items-center justify-between border-t border-border pt-4">
-                <span className="text-xs text-muted">
-                  {selectedStudentIds.size} student(s) selected
-                </span>
-
-                <div className="flex gap-2">
-                  <Button type="button" variant="secondary" onClick={() => setAddStudentModalOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={selectedStudentIds.size === 0}
-                    className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
-                  >
-                    Assign to Assessment
-                  </Button>
-                </div>
+              <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setCandFormError(null);
+                    setAddStudentModalOpen(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                >
+                  Enroll Candidate
+                </Button>
               </div>
             </form>
           </div>

@@ -1,4 +1,4 @@
-export type SessionStatus =
+﻿export type SessionStatus =
   | "link_opened"
   | "identity_check"
   | "identity_review"

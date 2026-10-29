@@ -144,16 +144,22 @@ export function ExamsPage() {
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-xl font-bold tracking-tight text-text">Assessments</h2>
-          <p className="text-xs text-muted">Create, schedule and manage assessments with status.</p>
+          <p className="text-xs text-muted">
+            {isLocationAdmin
+              ? "Review and audit all scheduled, live, and completed interview assessments."
+              : "Create, schedule and manage assessments with status."}
+          </p>
         </div>
 
-        <Button
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-2 bg-primary-600 font-medium text-white shadow-xs hover:bg-primary-700"
-        >
-          <Plus className="size-4" aria-hidden="true" />
-          <span>Create assessment</span>
-        </Button>
+        {!isLocationAdmin && (
+          <Button
+            onClick={() => setModalOpen(true)}
+            className="flex items-center gap-2 bg-primary-600 font-medium text-white shadow-xs hover:bg-primary-700"
+          >
+            <Plus className="size-4" aria-hidden="true" />
+            <span>Create assessment</span>
+          </Button>
+        )}
       </div>
 
       {/* Filter Tabs matching Design Board: All (3), Draft (1), Scheduled (1), Live (1), Completed (0) */}

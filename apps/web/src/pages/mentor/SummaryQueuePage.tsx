@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+﻿import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { Link, useParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";

@@ -103,7 +103,7 @@ export function AppShell({
       else navigate("/mentor/internship");
     } else {
       if (currentRole === "admin") navigate("/admin");
-      else if (currentRole === "candidate") navigate("/candidate");
+      else if (currentRole === "candidate") navigate("/candidate/assessments");
       else navigate("/mentor");
     }
   };

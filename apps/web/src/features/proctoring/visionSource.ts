@@ -1,4 +1,4 @@
-import { FACE_MODEL_URL, getLandmarker, WASM_BASE } from "../vision/camera";
+﻿import { FACE_MODEL_URL, getLandmarker, WASM_BASE } from "../vision/camera";
 import { faceBox, gazeRatios, headAngles, type Point } from "../vision/geometry";
 import { E2E, e2eSignals } from "@/lib/e2e";
 import type { FrameSignals } from "./signals";

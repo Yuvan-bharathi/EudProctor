@@ -1,8 +1,6 @@
 import {
   Award,
   BarChart3,
-  BookOpen,
-  Bot,
   CalendarCheck2,
   CheckSquare,
   ClipboardList,
@@ -11,10 +9,8 @@ import {
   Home,
   Layers,
   LineChart,
-  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   User,
   Users,
 } from "lucide-react";
@@ -27,15 +23,10 @@ const interviewNav: Record<Role, NavItem[]> = {
     { to: "/mentor", label: "Dashboard", icon: Home },
     { to: "/mentor/exams", label: "Assessments", icon: ClipboardList },
     { to: "/mentor/results", label: "Results & Analytics", icon: BarChart3 },
-    { to: "/mentor/summaries", label: "AI Summaries", icon: Sparkles },
-    { to: "/mentor/proctoring", label: "Proctoring", icon: ShieldAlert },
-    { to: "/mentor/agent", label: "Agent Runs", icon: Bot },
   ],
   candidate: [
-    { to: "/candidate", label: "Dashboard", icon: Home },
     { to: "/candidate/assessments", label: "My Assessments", icon: ClipboardList },
     { to: "/candidate/results", label: "My Results", icon: Award },
-    { to: "/candidate/practice", label: "Practice", icon: BookOpen },
     { to: "/candidate/profile", label: "My Profile", icon: User },
   ],
   admin: [
@@ -43,7 +34,6 @@ const interviewNav: Record<Role, NavItem[]> = {
     { to: "/admin/candidates", label: "Candidates & Batches", icon: GraduationCap },
     { to: "/admin/users", label: "Users", icon: Users },
     { to: "/admin/exams", label: "Assessments", icon: ClipboardList },
-    { to: "/admin/agent", label: "Agent Runs", icon: Bot },
     { to: "/admin/audit", label: "Audit Logs", icon: ShieldCheck },
   ],
 };

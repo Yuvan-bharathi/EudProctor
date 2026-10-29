@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
@@ -9,68 +8,28 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { RecentPerformanceMultiBarChart } from "@/components/charts";
 import { Card, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/features/auth/store";
-import { api } from "@/lib/api";
 import { mockMentorDashboard } from "@/lib/mockData";
-
-export interface Course {
-  id: string;
-  name: string;
-  code: string;
-}
 
 export function MentorHomePage() {
   usePageTitle("Mentor Dashboard");
   const { user } = useAuth();
-  const [selectedCourse, setSelectedCourse] = useState("Full Stack Development");
-
-  const coursesQuery = useQuery({
-    queryKey: ["courses"],
-    queryFn: () => api<Course[]>("/courses"),
-    retry: 1,
-  });
-
-  const courses = coursesQuery.data?.length
-    ? coursesQuery.data
-    : [
-        { id: "c1", name: "Full Stack Development", code: "FSD-301" },
-        { id: "c2", name: "Frontend", code: "FED-201" },
-        { id: "c3", name: "Backend", code: "BED-202" },
-        { id: "c4", name: "Data Analyst", code: "DAT-101" },
-        { id: "c5", name: "AI Engineer", code: "AIE-401" },
-      ];
 
   const stats = mockMentorDashboard;
 
   return (
     <div className="space-y-6">
-      {/* Top Welcome & Course Filter Bar */}
+      {/* Top Welcome Bar */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-xl font-bold tracking-tight text-text">
             Good morning, {user?.name ? user.name.split(" ")[0] : "Mentor"}!
           </h2>
-          <p className="text-xs text-muted">Here's what's happening with your assessments.</p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted">Course:</span>
-          <select
-            value={selectedCourse}
-            onChange={(e) => setSelectedCourse(e.target.value)}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
-          >
-            {courses.map((c) => (
-              <option key={c.id} value={c.name}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <p className="text-xs text-muted">Here's what's happening with your interview assessments.</p>
         </div>
       </div>
 

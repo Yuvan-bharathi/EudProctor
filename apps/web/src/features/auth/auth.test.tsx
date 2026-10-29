@@ -19,6 +19,7 @@ function renderAt(path: string) {
         <Route path="/login" element={<div>login page</div>} />
         <Route path="/mentor" element={<RequireRole roles={["mentor"]}>mentor home</RequireRole>} />
         <Route path="/candidate" element={<RequireRole roles={["candidate"]}>candidate home</RequireRole>} />
+        <Route path="/candidate/assessments" element={<RequireRole roles={["candidate"]}>candidate home</RequireRole>} />
         <Route path="/admin" element={<RequireRole roles={["admin"]}>admin home</RequireRole>} />
       </Routes>
     </MemoryRouter>,

@@ -315,18 +315,16 @@ export function ExamResultsPage() {
                       </div>
                     </TD>
                     <TD className="whitespace-nowrap text-xs">
-                      {r.score_pct !== null && (
+                      {r.score_pct !== null ? (
                         <Link
-                          className="text-primary-700 hover:underline font-medium"
-                          to={`/mentor/sessions/${r.session_id}/summary?examId=${examId}`}
+                          className="text-primary-700 hover:underline font-semibold"
+                          to={`/mentor/sessions/${r.session_id}/result`}
                         >
-                          AI Summary & Publish
+                          View Result
                         </Link>
-                      )}{" "}
-                      ·{" "}
-                      <Link className="text-muted hover:text-text hover:underline" to={`/mentor/sessions/${r.session_id}`}>
-                        Proctoring
-                      </Link>
+                      ) : (
+                        <span className="text-muted">In Progress</span>
+                      )}
                     </TD>
                   </TR>
                 ))}

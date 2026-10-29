@@ -9,7 +9,6 @@ import {
   FileText,
   Flag,
   GraduationCap,
-  Plus,
   Server,
   TrendingDown,
   TrendingUp,
@@ -39,7 +38,6 @@ import {
   mockSystemHealth,
   mockTopCourses,
   mockUserDistribution,
-  saveAssessmentToStorage,
   getPersistedAssessments,
 } from "@/lib/mockData";
 
@@ -50,18 +48,13 @@ export function AdminDashboardPage() {
   const [activityTimeframe, setActivityTimeframe] = useState("Last 30 days");
 
   // Drill-down modal states
-  const [assessmentsList, setAssessmentsList] = useState(getPersistedAssessments());
+  const [assessmentsList] = useState(getPersistedAssessments());
   const [healthModalOpen, setHealthModalOpen] = useState(false);
   const [selectedFlagSession, setSelectedFlagSession] = useState<FlaggedSessionRecent | null>(null);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newCourse, setNewCourse] = useState("Full Stack Development");
-  const [newDuration, setNewDuration] = useState("60");
-  const [newCreatedSuccess, setNewCreatedSuccess] = useState(false);
 
   return (
     <div className="space-y-6">
-      {/* Top Header with Date Range Filter & Create Assessment Action */}
+      {/* Top Header with Date Range Filter */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <div className="flex items-center gap-2">
@@ -71,7 +64,7 @@ export function AdminDashboardPage() {
               Live System
             </span>
           </div>
-          <p className="text-xs text-muted">Assessment integrity, learning outcomes, and AI agent usage at a glance.</p>
+          <p className="text-xs text-muted">Assessment integrity, learning outcomes, and candidate screening at a glance.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
@@ -88,18 +81,6 @@ export function AdminDashboardPage() {
               <option value="Academic Year 2024-25">Academic Year 2024–25</option>
             </select>
           </div>
-
-          <Button
-            size="sm"
-            onClick={() => {
-              setNewCreatedSuccess(false);
-              setCreateModalOpen(true);
-            }}
-            className="h-8 gap-1.5 text-xs bg-primary-600 hover:bg-primary-700 text-surface"
-          >
-            <Plus className="size-3.5" />
-            <span>Create Assessment</span>
-          </Button>
         </div>
       </div>
 
@@ -311,12 +292,9 @@ export function AdminDashboardPage() {
         <Card className="p-5 space-y-3 min-w-0">
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle className="text-sm font-semibold text-text">Assessments by Course</CardTitle>
+              <CardTitle className="text-sm font-semibold text-text">Assessments by Technology Track</CardTitle>
               <p className="text-[11px] text-muted">Volume, enrollment, and candidate completion rates</p>
             </div>
-            <Link to="/admin/courses" className="text-[11px] font-semibold text-primary-700 hover:underline">
-              View all →
-            </Link>
           </div>
 
           <div className="space-y-2.5 pt-1">
@@ -735,125 +713,6 @@ export function AdminDashboardPage() {
                 </Button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          DRILL-DOWN MODAL 3: CREATE ASSESSMENT MODAL
-          ========================================================================= */}
-      {createModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-text/30 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl space-y-4 animate-in fade-in-50 zoom-in-95">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-text">Create New Assessment</h3>
-              <button
-                type="button"
-                onClick={() => setCreateModalOpen(false)}
-                className="rounded-lg p-1 text-muted hover:bg-surface-muted hover:text-text transition-colors"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-
-            {newCreatedSuccess ? (
-              <div className="space-y-4 py-4 text-center">
-                <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-success-50 text-success-700">
-                  <CheckCircle2 className="size-6" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-text">Assessment Scheduled!</h4>
-                  <p className="text-xs text-muted mt-1">
-                    "{newTitle || "New Assessment"}" has been created for {newCourse}.
-                  </p>
-                </div>
-                <Button size="sm" onClick={() => setCreateModalOpen(false)}>
-                  Done
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3 text-xs">
-                <div>
-                  <label className="font-medium text-text block mb-1">Assessment Title</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Milestone 3 - Full Stack Architecture & Microservices"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-xs text-text focus:border-primary-500 focus:outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-medium text-text block mb-1">Course</label>
-                  <select
-                    value={newCourse}
-                    onChange={(e) => setNewCourse(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-xs text-text focus:border-primary-500 focus:outline-hidden"
-                  >
-                    <option value="Full Stack Development">Full Stack Development</option>
-                    <option value="Frontend">Frontend</option>
-                    <option value="Backend">Backend</option>
-                    <option value="Data Analyst">Data Analyst</option>
-                    <option value="AI Engineer">AI Engineer</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-medium text-text block mb-1">Duration (min)</label>
-                    <input
-                      type="number"
-                      value={newDuration}
-                      onChange={(e) => setNewDuration(e.target.value)}
-                      className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-xs text-text focus:border-primary-500 focus:outline-hidden"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-text block mb-1">Look-away Limit</label>
-                    <input
-                      type="text"
-                      disabled
-                      value="3.0s (Fixed)"
-                      className="w-full rounded-lg border border-border bg-surface-muted px-3 py-2 text-xs text-muted cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-border/80 bg-surface-muted/50 p-2.5 text-[11px] text-muted">
-                  Flags will automatically cap at 3 for candidates and stream telemetry to the Mentor Live Monitor.
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2 border-t border-border">
-                  <Button variant="secondary" size="sm" onClick={() => setCreateModalOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="bg-primary-600 hover:bg-primary-700 text-surface"
-                    onClick={() => {
-                      const id = `exam-adm-${Date.now().toString(36)}`;
-                      const parsedDuration = parseInt(newDuration, 10) || 60;
-                      const newCard = {
-                        id,
-                        title: newTitle.trim() || "New Assessment",
-                        course: newCourse,
-                        status: "scheduled" as const,
-                        questions: 10,
-                        duration_min: parsedDuration,
-                        total: 25,
-                        completed: 0,
-                      };
-                      const updated = saveAssessmentToStorage(newCard);
-                      setAssessmentsList(updated);
-                      setNewCreatedSuccess(true);
-                    }}
-                  >
-                    Schedule Assessment
-                  </Button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}

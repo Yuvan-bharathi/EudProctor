@@ -1,4 +1,4 @@
-import type { FaceLandmarkerResult } from "@mediapipe/tasks-vision";
+﻿import type { FaceLandmarkerResult } from "@mediapipe/tasks-vision";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { E2E } from "@/lib/e2e";
 import { CameraError, getLandmarker, startCamera, stopCamera } from "./camera";

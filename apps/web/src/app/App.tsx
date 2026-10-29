@@ -5,17 +5,13 @@ import { AdminCandidatesPage } from "@/pages/admin/AdminCandidatesPage";
 import { AdminDashboardPage } from "@/pages/admin/AdminDashboardPage";
 import { AdminUserPage } from "@/pages/admin/AdminUserPage";
 import { AdminUsersPage } from "@/pages/admin/AdminUsersPage";
-import { AgentDashboardPage } from "@/pages/agent/AgentDashboardPage";
-import { RunDetailPage } from "@/pages/agent/RunDetailPage";
 import { CandidateAssessmentsPage } from "@/pages/candidate/CandidateAssessmentsPage";
 import { CandidateExamPage } from "@/pages/candidate/CandidateExamPage";
-import { CandidateHomePage } from "@/pages/candidate/CandidateHomePage";
 import { CandidateIdentityPage } from "@/pages/candidate/CandidateIdentityPage";
 import { CandidateInstructionsPage } from "@/pages/candidate/CandidateInstructionsPage";
 import { CandidateProfilePage } from "@/pages/candidate/CandidateProfilePage";
 import { CandidateResultsViewPage } from "@/pages/candidate/CandidateResultsViewPage";
 import { JoinPage } from "@/pages/candidate/JoinPage";
-import { PracticePage } from "@/pages/candidate/PracticePage";
 import { SessionPage } from "@/pages/candidate/SessionPage";
 import { DesignShowcasePage } from "@/pages/DesignShowcasePage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -28,8 +24,6 @@ import { MarkingPage } from "@/pages/mentor/MarkingPage";
 import { MentorHomePage } from "@/pages/mentor/MentorHomePage";
 import { QuestionBankPage } from "@/pages/mentor/QuestionBankPage";
 import { SessionDetailsPage } from "@/pages/mentor/SessionDetailsPage";
-import { SummaryQueuePage } from "@/pages/mentor/SummaryQueuePage";
-import { SummaryReviewPage } from "@/pages/mentor/SummaryReviewPage";
 import { StyleguidePage } from "@/pages/StyleguidePage";
 import { AdminAttendanceAuditPage } from "@/pages/internship/admin/AdminAttendanceAuditPage";
 import { AdminCodingBankPage } from "@/pages/internship/admin/AdminCodingBankPage";
@@ -93,8 +87,8 @@ export function App() {
         <Route path="courses" element={<Navigate to="/admin/exams" replace />} />
         <Route path="courses/:courseId" element={<Navigate to="/admin/exams" replace />} />
         <Route path="notes" element={<Navigate to="/admin/exams" replace />} />
-        <Route path="agent" element={<AgentDashboardPage />} />
-        <Route path="agent/runs/:runId" element={<RunDetailPage />} />
+        <Route path="agent" element={<Navigate to="/admin" replace />} />
+        <Route path="agent/runs/:runId" element={<Navigate to="/admin" replace />} />
         <Route path="audit" element={<AdminAuditPage />} />
 
         {/* Admin Internship Routes */}
@@ -114,18 +108,18 @@ export function App() {
         <Route path="exams/:examId/live" element={<ExamDetailPage />} />
         <Route path="exams/:examId/results" element={<ExamResultsPage />} />
         <Route path="exams/:examId/marking" element={<MarkingPage />} />
-        <Route path="exams/:examId/summaries" element={<SummaryQueuePage />} />
+        <Route path="exams/:examId/summaries" element={<Navigate to="/mentor/results" replace />} />
         <Route path="candidates" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="results" element={<ExamResultsPage />} />
-        <Route path="summaries" element={<SummaryQueuePage />} />
-        <Route path="proctoring" element={<SessionDetailsPage />} />
+        <Route path="summaries" element={<Navigate to="/mentor/results" replace />} />
+        <Route path="proctoring" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="notes" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="identity" element={<IdentityReviewPage />} />
         <Route path="sessions/:sessionId" element={<SessionDetailsPage />} />
         <Route path="sessions/:sessionId/result" element={<CandidateResultPage />} />
-        <Route path="sessions/:sessionId/summary" element={<SummaryReviewPage />} />
-        <Route path="agent" element={<AgentDashboardPage />} />
-        <Route path="agent/runs/:runId" element={<RunDetailPage />} />
+        <Route path="sessions/:sessionId/summary" element={<CandidateResultPage />} />
+        <Route path="agent" element={<Navigate to="/mentor" replace />} />
+        <Route path="agent/runs/:runId" element={<Navigate to="/mentor" replace />} />
 
         {/* Mentor / Manager Internship Routes */}
         <Route path="internship" element={<ManagerInternshipHubPage />} />
@@ -184,11 +178,11 @@ export function App() {
 
       {/* Candidate Portal */}
       <Route path="/candidate" element={<RoleLayout role="candidate" />}>
-        <Route index element={<CandidateHomePage />} />
+        <Route index element={<Navigate to="/candidate/assessments" replace />} />
         <Route path="assessments" element={<CandidateAssessmentsPage />} />
         <Route path="results" element={<CandidateResultsViewPage />} />
-        <Route path="practice" element={<PracticePage />} />
-        <Route path="practice/:practiceId" element={<PracticePage />} />
+        <Route path="practice" element={<Navigate to="/candidate/assessments" replace />} />
+        <Route path="practice/:practiceId" element={<Navigate to="/candidate/assessments" replace />} />
         <Route path="profile" element={<CandidateProfilePage />} />
 
         {/* Mentee Internship Routes */}

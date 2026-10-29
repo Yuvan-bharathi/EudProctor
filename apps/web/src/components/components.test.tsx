@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+﻿import { act, render, screen } from "@testing-library/react";
 import { FlagCounter } from "./FlagCounter";
 import { FlagNotice } from "./FlagNotice";
 import { TopicChip } from "./TopicChip";
