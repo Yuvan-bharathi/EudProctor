@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AssessmentEvaluationSummary",
+  "type": "object",
+  "required": ["overall", "strong_topics", "weak_topics", "recommended_topics", "message", "data_notes", "integrity_note"],
+  "properties": {
+    "overall": {
+      "type": "object",
+      "required": ["score_pct"],
+      "properties": {
+        "score_pct": {"type": "number"},
+        "class_percentile": {"type": ["number", "null"]},
+        "change_vs_previous_pct": {"type": ["number", "null"]}
+      }
+    },
+    "strong_topics": {"type": "array", "items": {"$ref": "#/$defs/topic"}},
+    "developing_topics": {"type": "array", "items": {"$ref": "#/$defs/topic"}},
+    "weak_topics": {"type": "array", "items": {"$ref": "#/$defs/topic"}},
+    "misconceptions": {
+      "type": "array",
+      "items": {"type": "object", "required": ["misconception_id", "explanation"],
+        "properties": {"misconception_id": {"type": "string"}, "explanation": {"type": "string", "maxLength": 300}}}
+    },
+    "recommended_topics": {
+      "type": "array", "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["topic_id", "priority", "reason", "note_ids"],
+        "properties": {
+          "topic_id": {"type": "string"},
+          "priority": {"type": "integer", "minimum": 1},
+          "reason": {"type": "string", "maxLength": 240},
+          "note_ids": {"type": "array", "items": {"type": "string"}},
+          "practice_question_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+          "needs_mentor_note": {"type": "boolean"}
+        }
+      }
+    },
+    "message": {"type": "string", "maxLength": 900, "description": "Short encouraging note to the candidate; no proctoring content"},
+    "data_notes": {"type": "array", "items": {"type": "string"}, "description": "Mentor only"},
+    "integrity_note": {"type": "string", "description": "Mentor only, never published"}
+  },
+  "$defs": {
+    "topic": {
+      "type": "object",
+      "required": ["topic_id", "name", "score_pct", "n_questions"],
+      "properties": {
+        "topic_id": {"type": "string"}, "name": {"type": "string"},
+        "score_pct": {"type": "number"}, "n_questions": {"type": "integer"}
+      }
+    }
+  }
+}

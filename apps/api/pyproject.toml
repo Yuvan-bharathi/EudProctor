@@ -1,0 +1,54 @@
+[project]
+name = "eduproctor-api"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "sqlalchemy>=2.0.36",
+  "alembic>=1.14",
+  "psycopg[binary]>=3.2",
+  "redis>=5.2",
+  "pyjwt>=2.10",
+  "email-validator>=2.2",
+  "anthropic>=0.60",
+  "cryptography>=43",
+  "pillow>=11",
+  "numpy>=2.1",
+  "jsonschema>=4.23",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "pgserver>=0.1.4",
+    "fakeredis>=2.26",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008", "E501"]  # the formatter wraps code; long prose strings (prompts, messages) are allowed
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*" = ["E501", "UP", "I", "F401"]
+"tests/*" = ["E501"]
+
+[project.optional-dependencies]
+# Real face recognition. Windows needs MSVC build tools for insightface; models are non-commercial licensed.
+identity = ["insightface>=0.7.3", "onnxruntime>=1.19"]

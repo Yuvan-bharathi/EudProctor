@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EduProctor — Soft Mist preview</title>
+<style>
+:root{--bg:#F7F9FA;--surface:#FFFFFF;--surface-muted:#F1F4F6;--border:#E2E7EB;--border-strong:#CDD5DC;--text:#1F2A37;--text-muted:#5B6676;--text-subtle:#8792A0;
+--primary-50:#EEF6F5;--primary-100:#D8EBE8;--primary-500:#5E9C96;--primary-600:#3F7D78;--primary-700:#336661;
+--ai-50:#F2F1FA;--ai-100:#E3E1F4;--ai-500:#8B85C9;--ai-700:#5A548F;
+--success-50:#EAF5EE;--success-500:#6BAE8A;--success-700:#2F6B4C;--warning-50:#FBF4E6;--warning-500:#E0B25E;--warning-800:#8A5A14;
+--danger-50:#FCEDEB;--danger-500:#D9786F;--danger-600:#B4514A;--danger-700:#A8433C;--info-50:#EBF2F9;--info-500:#7FA6CC;--info-700:#36658F}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:32px 24px 48px}h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:32px 0 12px}
+.muted{color:var(--text-muted)}.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px}
+.grid{display:grid;gap:12px}.sw{border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--surface)}
+.sw div:first-child{height:56px}.sw p{margin:0;padding:8px 10px;font-size:12px}.sw b{display:block;font-size:12px}
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500}
+.btn{border-radius:10px;padding:8px 14px;font:inherit;font-weight:600;border:1px solid var(--border);background:var(--surface);color:var(--text)}
+.btn.primary{background:var(--primary-600);border-color:var(--primary-600);color:#fff}
+.dots{display:inline-flex;gap:4px;margin-right:6px}.dot{width:8px;height:8px;border-radius:50%;border:1px solid var(--border-strong)}.dot.on{background:var(--danger-500);border-color:var(--danger-500)}
+table{width:100%;border-collapse:collapse;font-size:13px}th{background:var(--surface-muted);color:var(--text-muted);text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:8px 12px}
+td{padding:10px 12px;border-top:1px solid var(--border)}td.mono{font-family:ui-monospace,Menlo,monospace}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px}.stat .v{font-size:22px;font-weight:600}
+</style></head><body><main>
+<h1>EduProctor · Soft Mist light theme</h1><p class="muted">Preview of colour tokens and key components. All text pairs meet WCAG AA (≥ 4.5:1).</p>
+
+<h2>Palette</h2>
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))" id="sw"></div>
+
+<h2>Candidate assessment page</h2>
+<div class="card" style="display:flex;justify-content:space-between;align-items:center">
+  <div><b>Thermodynamics · Unit test 2</b><div class="muted">Question 7 of 20 · 24:18 left</div></div>
+  <span class="chip" style="background:var(--surface-muted);color:var(--danger-700)"><span class="dots"><span class="dot on"></span><span class="dot"></span><span class="dot"></span></span>Flags 1 of 3</span>
+</div>
+<div style="margin-top:12px;display:inline-block;background:var(--danger-50);color:var(--danger-700);border:1px solid #D9786F4D;border-radius:12px;padding:10px 16px">Flag 1 of 3 – please keep your eyes on the screen.</div>
+
+<h2>Mentor · candidate details</h2>
+<div class="grid" style="grid-template-columns:repeat(4,1fr)">
+  <div class="stat"><div class="muted" style="font-size:12px">Red flags</div><div class="v" style="color:var(--danger-700)">2 / 3</div></div>
+  <div class="stat"><div class="muted" style="font-size:12px">Head glances</div><div class="v">6</div></div>
+  <div class="stat"><div class="muted" style="font-size:12px">Eye glances</div><div class="v">9</div></div>
+  <div class="stat"><div class="muted" style="font-size:12px">Other alerts</div><div class="v">0</div></div>
+</div>
+<div class="card" style="padding:0;margin-top:12px;overflow:hidden"><table>
+<tr><th>Time</th><th>Event</th><th>Direction</th><th>Duration</th><th>Candidate notified</th></tr>
+<tr><td class="mono">00:04:12</td><td><span class="chip" style="background:var(--info-50);color:var(--info-700)">Glance · eyes</span></td><td>Left</td><td>1.4 s</td><td>No</td></tr>
+<tr><td class="mono">00:09:37</td><td><span class="chip" style="background:var(--danger-50);color:var(--danger-700)">Red flag 1 of 3 · head</span></td><td>Right</td><td>3.8 s</td><td>Yes</td></tr>
+<tr><td class="mono">00:21:44</td><td><span class="chip" style="background:var(--danger-50);color:var(--danger-700)">Red flag 2 of 3 · eyes</span></td><td>Down</td><td>4.6 s</td><td>Yes</td></tr>
+</table></div>
+
+<h2>Assessment Evaluation Summary (mentor review)</h2>
+<div class="card" style="background:var(--ai-50);border-color:var(--ai-100)">
+  <span class="chip" style="background:var(--ai-100);color:var(--ai-700)">✦ AI draft</span>
+  <p style="margin:12px 0 8px"><b>Strong:</b> <span class="chip" style="background:var(--success-50);color:var(--success-700)">Heat transfer · 88%</span>
+  <b style="margin-left:12px">Developing:</b> <span class="chip" style="background:var(--warning-50);color:var(--warning-800)">Entropy · 70%</span>
+  <b style="margin-left:12px">Weak:</b> <span class="chip" style="background:var(--danger-50);color:var(--danger-700)">First law · 45%</span></p>
+  <p class="muted" style="margin:0 0 14px">Recommended: 1. First law — mixes up heat and work sign convention · Notes: “Energy balance basics” · 8 practice questions</p>
+  <button class="btn">Request changes</button> <button class="btn primary">Approve</button>
+</div>
+<script>
+const s=[['bg','#F7F9FA','Page'],['surface','#FFFFFF','Cards'],['surface-muted','#F1F4F6','Headers'],['border','#E2E7EB','Lines'],['text','#1F2A37','Body text'],['text-muted','#5B6676','Labels'],
+['primary-50','#EEF6F5','Tint'],['primary-600','#3F7D78','Actions'],['ai-50','#F2F1FA','AI tint'],['ai-500','#8B85C9','AI accent'],['success-50','#EAF5EE','Strong'],['warning-50','#FBF4E6','Developing'],
+['danger-50','#FCEDEB','Flag / weak'],['danger-500','#D9786F','Flag dot'],['info-50','#EBF2F9','Glance'],['info-500','#7FA6CC','Info']];
+document.getElementById('sw').innerHTML=s.map(([n,h,u])=>`<div class="sw"><div style="background:${h}"></div><p><b>${n}</b>${h} · ${u}</p></div>`).join('');
+</script>
+</main></body></html>
