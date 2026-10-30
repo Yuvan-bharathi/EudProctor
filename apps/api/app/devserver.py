@@ -1,4 +1,4 @@
-"""Run the API against an embedded Postgres when Docker is unavailable.
+"""Run the API against TiDB Cloud or embedded Postgres when Docker is unavailable.
 
 uv run python -m app.devserver          # migrate, seed (incl. demo data) if empty, serve on :8000 with reload
 
@@ -12,18 +12,28 @@ import uvicorn
 
 os.environ.setdefault("ENVIRONMENT", "dev")  # before settings are first read
 
-from app.devdb import local_postgres, migrate
+from app.core.config import get_settings
 
 
 def main() -> None:
-    url = local_postgres(
-        os.environ.get("DEV_DB_NAME", "eduproctor"), fresh=os.environ.get("DEV_RESET") == "1"
-    )
-    os.environ["DATABASE_URL"] = url
-    migrate(url)
-    from app.seed import seed_if_empty
+    settings = get_settings()
+    configured_url = os.environ.get("DATABASE_URL") or settings.database_url
 
+    if "mysql" in configured_url or "tidb" in configured_url:
+        print(f"Connecting devserver to TiDB Cloud / MySQL: {configured_url.split('@')[-1]}")
+        from app.core.db import Base, get_engine
+        Base.metadata.create_all(get_engine())
+    else:
+        from app.devdb import local_postgres, migrate
+        url = local_postgres(
+            os.environ.get("DEV_DB_NAME", "eduproctor"), fresh=os.environ.get("DEV_RESET") == "1"
+        )
+        os.environ["DATABASE_URL"] = url
+        migrate(url)
+
+    from app.seed import seed_if_empty
     seed_if_empty(demo=os.environ.get("DEV_DEMO", "1") == "1")
+
     uvicorn.run(
         "app.main:app",
         host="127.0.0.1",

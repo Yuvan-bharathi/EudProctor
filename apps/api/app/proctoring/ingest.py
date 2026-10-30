@@ -149,6 +149,27 @@ def ingest(db: Session, sess: ExamSession, events: list[EventIn]) -> IngestResul
         res.rejected = len(events)
         return res
 
+    # Optimization for TiDB Cloud: Batch fetch existing event IDs in 2 queries instead of 2*N queries
+    candidate_ids = [e.client_event_id for e in events]
+    existing_event_ids: set[str] = set()
+    if candidate_ids:
+        existing_event_ids.update(
+            db.scalars(
+                select(ProctorEvent.client_event_id).where(
+                    ProctorEvent.session_id == sess.id,
+                    ProctorEvent.client_event_id.in_(candidate_ids),
+                )
+            )
+        )
+        existing_event_ids.update(
+            db.scalars(
+                select(GlanceLog.client_event_id).where(
+                    GlanceLog.session_id == sess.id,
+                    GlanceLog.client_event_id.in_(candidate_ids),
+                )
+            )
+        )
+
     for ev in sorted(events, key=lambda e: e.started_at):
         if ev.type not in CLIENT_TYPES or not _valid_window(sess, ev, now):
             res.rejected += 1
@@ -165,7 +186,7 @@ def ingest(db: Session, sess: ExamSession, events: list[EventIn]) -> IngestResul
                     }
                 )
             continue
-        if _event_exists(db, sess, ev.client_event_id):
+        if ev.client_event_id in existing_event_ids:
             res.accepted += 1  # idempotent retry
             continue
 
