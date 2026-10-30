@@ -1,18 +1,15 @@
 import {
   Bell,
-  Check,
-  ChevronDown,
   GraduationCap,
   LogOut,
   type LucideIcon,
   Rocket,
   Search,
   Target,
-  UserCheck,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { authStore, type Role, roleHome, roleLabel, useAuth } from "@/features/auth/store";
+import { type Role, useAuth } from "@/features/auth/store";
 import {
   type AppModuleMode,
   getActiveAppModule,
@@ -56,7 +53,7 @@ function NavLinks({ nav, compact = false }: { nav: NavItem[]; compact?: boolean 
 export function AppShell({
   nav = [],
   title,
-  roleLabel: roleLabelProp,
+  roleLabel: _roleLabel,
   topRight,
   sidebarFooter,
   children,
@@ -70,7 +67,6 @@ export function AppShell({
 }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const location = useLocation();
 
@@ -108,62 +104,6 @@ export function AppShell({
   };
 
   const activeNav = nav && nav.length > 0 ? nav : navFor(currentRole, activeModule);
-
-  const getRoleLabel = (role: Role) => {
-    if (activeModule === "internship") {
-      if (role === "mentor") return "Manager";
-      if (role === "candidate") return "Mentee";
-      return "Programme Admin";
-    }
-    return roleLabel[role];
-  };
-
-  const handleRoleSwitch = async (role: Role) => {
-    setRoleMenuOpen(false);
-    const demoCreds: Record<Role, { email: string; pass: string }> = {
-      mentor: { email: "mentor1@example.com", pass: "eduproctor-dev" },
-      candidate: { email: "candidate01@example.com", pass: "eduproctor-dev" },
-      admin: { email: "admin@example.com", pass: "eduproctor-dev" },
-    };
-    const cred = demoCreds[role];
-    try {
-      const res = await api<AuthState>("/auth/login", { body: { email: cred.email, password: cred.pass }, auth: false });
-      authStore.set(res);
-      if (activeModule === "internship") {
-        if (role === "admin") navigate("/admin/internship");
-        else if (role === "candidate") navigate("/candidate/internship");
-        else navigate("/mentor/internship");
-      } else {
-        navigate(roleHome[role]);
-      }
-      return;
-    } catch {
-      const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
-        mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Mentor Asha" },
-        candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Bela Sato" },
-        admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
-      };
-      const targetUser = mockUsers[role];
-      authStore.set({
-        access_token: `mock-${role}-token`,
-        refresh_token: `mock-${role}-refresh`,
-        user: {
-          id: targetUser.id,
-          email: targetUser.email,
-          name: targetUser.name,
-          role,
-          is_active: true,
-        },
-      });
-      if (activeModule === "internship") {
-        if (role === "admin") navigate("/admin/internship");
-        else if (role === "candidate") navigate("/candidate/internship");
-        else navigate("/mentor/internship");
-      } else {
-        navigate(roleHome[role]);
-      }
-    }
-  };
 
   return (
     <div className="flex h-screen w-full max-w-full overflow-hidden bg-bg text-text">
@@ -262,7 +202,7 @@ export function AppShell({
 
           {/* Search & Actions */}
           <div className="flex items-center gap-3">
-            {/* Global Search Bar (like in designs) */}
+            {/* Global Search Bar */}
             <div className="relative hidden w-64 md:block">
               <Search className="absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
               <input
@@ -283,50 +223,6 @@ export function AppShell({
               <Bell className="size-4.5" />
               <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-danger-500" />
             </button>
-
-            {/* Role Switcher Dropdown */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setRoleMenuOpen(!roleMenuOpen)}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-text transition-colors hover:bg-surface-muted"
-                aria-expanded={roleMenuOpen}
-                aria-haspopup="true"
-              >
-                <UserCheck className="size-3.5 text-primary-600" />
-                <span>{roleLabelProp ? (activeModule === "internship" ? roleLabelProp.replace("Mentor", "Manager").replace("Candidate", "Mentee") : roleLabelProp) : getRoleLabel(currentRole)}</span>
-                <ChevronDown className="size-3 text-muted" />
-              </button>
-
-              {roleMenuOpen && (
-                <div
-                  className="absolute right-0 mt-2 w-48 rounded-xl border border-border bg-surface py-1 shadow-md z-30"
-                  role="menu"
-                >
-                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                    Switch Active Role
-                  </div>
-                  {(["mentor", "candidate", "admin"] as Role[]).map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => handleRoleSwitch(r)}
-                      className={cn(
-                        "flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors",
-                        currentRole === r
-                          ? "bg-primary-50 font-medium text-primary-700"
-                          : "text-text hover:bg-surface-muted",
-                      )}
-                      role="menuitem"
-                    >
-                      <span>{getRoleLabel(r)} Portal</span>
-                      {currentRole === r && <Check className="size-3.5 text-primary-600" />}
-                    </button>
-                  ))}
-
-                </div>
-              )}
-            </div>
 
             {/* Avatar Pill */}
             <div className="flex size-8 items-center justify-center rounded-full bg-primary-100 text-xs font-semibold text-primary-700">
@@ -355,4 +251,3 @@ export function AppShell({
     </div>
   );
 }
-
