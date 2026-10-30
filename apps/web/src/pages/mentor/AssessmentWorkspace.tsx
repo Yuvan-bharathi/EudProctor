@@ -12,6 +12,7 @@ import {
   Eye,
   FileSpreadsheet,
   Filter,
+  HelpCircle,
   Mail,
   Maximize2,
   Minimize2,
@@ -57,6 +58,7 @@ import {
 } from "@/lib/excelHelper";
 import {
   getPersistedAssessments,
+  getStoredExamDetail,
   mockAssignmentsList,
   type LiveCandidateRow,
   mockLiveCandidates,
@@ -98,12 +100,20 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   // State for questions (CRUD)
   const [questions, setQuestions] = useState<Question[]>(() => {
-    return exam?.questions?.length ? exam.questions : mockQuestionsList;
+    if (exam?.questions !== undefined) return exam.questions;
+    const stored = getStoredExamDetail<{ questions?: Question[] }>(examId);
+    if (stored?.questions !== undefined) return stored.questions;
+    const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(examId);
+    return isSeeded ? mockQuestionsList : [];
   });
 
   // State for enrolled candidates (CRUD)
   const [assignments, setAssignments] = useState<Assignment[]>(() => {
-    return exam?.assignments?.length ? exam.assignments : mockAssignmentsList;
+    if (exam?.assignments !== undefined) return exam.assignments;
+    const stored = getStoredExamDetail<{ assignments?: Assignment[] }>(examId);
+    if (stored?.assignments !== undefined) return stored.assignments;
+    const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(examId);
+    return isSeeded ? mockAssignmentsList : [];
   });
 
   const [searchParams] = useSearchParams();
@@ -746,23 +756,49 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         <div className="space-y-6 animate-in fade-in">
           {/* Draft Notification & Publish Prompt Banner */}
           {assessmentStatus === "draft" && (
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between rounded-xl border border-primary-200 bg-primary-50/50 p-4 gap-3 shadow-2xs">
+            <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between rounded-xl border p-4 gap-3 shadow-2xs ${
+              questions.length === 0
+                ? "border-amber-200 bg-amber-50/50"
+                : "border-primary-200 bg-primary-50/50"
+            }`}>
               <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs font-bold text-primary-900">
+                <div className={`flex items-center gap-2 text-xs font-bold ${
+                  questions.length === 0 ? "text-amber-900" : "text-primary-900"
+                }`}>
                   <Send className="size-4 text-primary-700" />
                   <span>Assessment is in Draft Status</span>
                 </div>
-                <p className="text-xs text-primary-800">
-                  You have configured <strong>{questions.length} questions</strong> and enrolled <strong>{assignments.length} candidates</strong>.
-                  Click <em>Publish & Schedule</em> to select the examination date/time and dispatch secure test link emails.
+                <p className={`text-xs ${
+                  questions.length === 0 ? "text-amber-800" : "text-primary-800"
+                }`}>
+                  {questions.length === 0 ? (
+                    <>⚠️ You have not assigned any questions yet. Add questions via the <strong>Questions</strong> tab (custom, AI, or Excel) before publishing.</>
+                  ) : (
+                    <>You have configured <strong>{questions.length} questions</strong> and enrolled <strong>{assignments.length} candidates</strong>. Click <em>Publish & Schedule</em> to select the examination date/time and dispatch secure test link emails.</>
+                  )}
                 </p>
               </div>
               <Button
-                onClick={() => setPublishModalOpen(true)}
+                onClick={() => {
+                  if (questions.length === 0) {
+                    setActiveTab("questions");
+                  } else {
+                    setPublishModalOpen(true);
+                  }
+                }}
                 className="shrink-0 bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs cursor-pointer"
               >
-                <Send className="size-3.5 mr-1.5" />
-                <span>Publish & Schedule</span>
+                {questions.length === 0 ? (
+                  <>
+                    <Plus className="size-3.5 mr-1.5" />
+                    <span>Add Questions</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="size-3.5 mr-1.5" />
+                    <span>Publish & Schedule</span>
+                  </>
+                )}
               </Button>
             </div>
           )}
@@ -932,14 +968,68 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
           {/* Questions List */}
           {questions.length === 0 ? (
-            <EmptyState
-              message="No questions in this assessment yet. Add a custom question, generate with AI, or upload an Excel file."
-              action={
-                <Button size="sm" onClick={handleOpenAddCustomQuestion} className="mt-2">
-                  <Plus className="size-4 mr-1.5" /> Add First Question
-                </Button>
-              }
-            />
+            <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center shadow-2xs space-y-6">
+              <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary-50 text-primary-600">
+                <HelpCircle className="size-7" />
+              </div>
+              <div className="space-y-1 max-w-md mx-auto">
+                <h3 className="text-base font-bold text-text">No Questions Assigned Yet</h3>
+                <p className="text-xs text-muted leading-relaxed">
+                  This new assessment is currently empty. Choose an option below to assign questions before publishing.
+                </p>
+              </div>
+
+              {/* 3 Action Cards */}
+              <div className="grid gap-4 sm:grid-cols-3 max-w-2xl mx-auto text-left">
+                {/* 1. Generate with AI */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiTopicInput(settingsCourse || "Full Stack Development");
+                    setAiModalOpen(true);
+                  }}
+                  className="rounded-xl border border-ai-200 bg-ai-50/40 p-4 transition-all hover:border-ai-400 hover:shadow-xs group cursor-pointer"
+                >
+                  <div className="flex size-9 items-center justify-center rounded-lg bg-ai-100 text-ai-700 mb-2.5 group-hover:scale-105 transition-transform">
+                    <Sparkles className="size-4.5" />
+                  </div>
+                  <div className="font-bold text-xs text-ai-950">Generate with AI</div>
+                  <p className="text-[11px] text-ai-800 leading-tight mt-1">
+                    Instant MCQ suggestions based on curriculum track.
+                  </p>
+                </button>
+
+                {/* 2. Upload from Excel / CSV */}
+                <button
+                  type="button"
+                  onClick={() => setExcelModalOpen(true)}
+                  className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 transition-all hover:border-emerald-400 hover:shadow-xs group cursor-pointer"
+                >
+                  <div className="flex size-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 mb-2.5 group-hover:scale-105 transition-transform">
+                    <Upload className="size-4.5" />
+                  </div>
+                  <div className="font-bold text-xs text-emerald-950">Import Excel / CSV</div>
+                  <p className="text-[11px] text-emerald-800 leading-tight mt-1">
+                    Upload bulk question bank spreadsheets.
+                  </p>
+                </button>
+
+                {/* 3. Add Custom Question */}
+                <button
+                  type="button"
+                  onClick={handleOpenAddCustomQuestion}
+                  className="rounded-xl border border-primary-200 bg-primary-50/40 p-4 transition-all hover:border-primary-400 hover:shadow-xs group cursor-pointer"
+                >
+                  <div className="flex size-9 items-center justify-center rounded-lg bg-primary-100 text-primary-700 mb-2.5 group-hover:scale-105 transition-transform">
+                    <Plus className="size-4.5" />
+                  </div>
+                  <div className="font-bold text-xs text-primary-950">Create Custom</div>
+                  <p className="text-[11px] text-primary-800 leading-tight mt-1">
+                    Manually write questions, marks & options.
+                  </p>
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="space-y-3.5">
               {questions.map((q, idx) => (
@@ -2389,13 +2479,39 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-muted">Configured Questions:</span>
-                  <span className="font-semibold text-primary-700">{questions.length} MCQs</span>
+                  <span className={`font-semibold ${questions.length === 0 ? "text-amber-700 font-bold" : "text-primary-700"}`}>
+                    {questions.length} MCQs
+                  </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-muted">Enrolled Candidates:</span>
                   <span className="font-semibold text-emerald-700">{assignments.length} Candidates</span>
                 </div>
               </div>
+
+              {/* Zero Questions Alert Blocker */}
+              {questions.length === 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-950 flex items-start gap-2.5">
+                  <AlertTriangle className="size-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <span className="font-bold block text-amber-900">Cannot publish: 0 questions assigned</span>
+                    <p className="text-[11px] text-amber-800 leading-relaxed">
+                      You must add at least one question to this assessment before scheduling and dispatching test links.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPublishModalOpen(false);
+                        setActiveTab("questions");
+                      }}
+                      className="text-[11px] font-semibold text-amber-900 underline hover:text-amber-950 mt-1 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Add questions now in Questions tab</span>
+                      <ChevronRight className="size-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Date & Time Selection */}
               <div className="space-y-3">
@@ -2486,8 +2602,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   type="submit"
                   size="sm"
-                  disabled={isPublishing}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1.5 shadow-xs cursor-pointer"
+                  disabled={isPublishing || questions.length === 0}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1.5 shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Send className="size-3.5" />
                   <span>{isPublishing ? "Publishing & Emailing..." : "Confirm & Publish Assessment"}</span>

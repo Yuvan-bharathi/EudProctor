@@ -91,12 +91,12 @@ export function ExamsPage() {
         status: "draft" as const,
         questions: 0,
         duration_min: duration,
-        total: 45,
+        total: 0,
         createdBy: isLocationAdmin ? "System Admin" : "Priya Sharma (Tech Lead)",
         createdDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
         targetRole: courseId,
       };
-      saveAssessmentToStorage(newCard);
+      saveAssessmentToStorage(newCard, { questions: [], assignments: [] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setModalOpen(false);
       navigate(`${baseExamPath}/${newCard.id}`);

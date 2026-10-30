@@ -807,14 +807,17 @@ export const DEFAULT_EXAM_40_QUESTIONS: Question[] = [
 export function getExamQuestions(examId?: string): Question[] {
   if (examId) {
     const detail = getStoredExamDetail<{ questions?: Question[] }>(examId);
-    if (detail?.questions && Array.isArray(detail.questions) && detail.questions.length > 0) {
-      // If exam has custom questions, use them and pad up to 40 if needed
-      const custom = detail.questions;
-      if (custom.length >= 40) return custom;
-      const needed = 40 - custom.length;
-      const padded = [...custom, ...DEFAULT_EXAM_40_QUESTIONS.slice(0, needed)];
-      return padded;
+    if (detail && detail.questions !== undefined) {
+      // Return exactly what was assigned to this specific assessment
+      return Array.isArray(detail.questions) ? detail.questions : [];
     }
+    // Only the seeded demo assessments fallback to the default bank
+    const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(examId);
+    if (isSeeded) {
+      return DEFAULT_EXAM_40_QUESTIONS;
+    }
+    // Any new assessment without assigned questions starts clean with 0 questions
+    return [];
   }
   return DEFAULT_EXAM_40_QUESTIONS;
 }

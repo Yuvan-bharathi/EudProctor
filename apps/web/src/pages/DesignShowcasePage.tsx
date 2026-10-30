@@ -1,4 +1,4 @@
-﻿import {
+import {
   ArrowRight,
   GraduationCap,
   Shield,
@@ -459,12 +459,12 @@ export function DesignShowcasePage() {
                 </div>
               </div>
 
-              {/* Screen 7: Identity Verification */}
+              {/* Screen 7: Camera Setup */}
               <div className="flex flex-col justify-between rounded-xl border border-border bg-surface p-4.5 shadow-2xs transition-all hover:border-primary-300 hover:shadow-xs">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-primary-700">7. Identity Verification</span>
-                    <span className="rounded bg-primary-50 text-primary-700 px-1.5 py-0.5 text-[10px]">Liveness</span>
+                    <span className="text-xs font-bold text-primary-700">7. Camera Setup</span>
+                    <span className="rounded bg-primary-50 text-primary-700 px-1.5 py-0.5 text-[10px]">Head Alignment</span>
                   </div>
 
                   {/* Thumbnail Mockup Preview */}
@@ -473,21 +473,21 @@ export function DesignShowcasePage() {
                       [Camera Face Oval]
                     </div>
                     <div className="space-y-0.5 text-[8px] text-success-700 font-medium">
-                      <div>✓ Face detected</div>
-                      <div>✓ Liveness check (blink)</div>
-                      <div>✓ Face matched (ArcFace)</div>
+                      <div>✓ Webcam connected</div>
+                      <div>✓ Face detected in oval</div>
+                      <div>✓ Head alignment (level & centered)</div>
                     </div>
                   </div>
 
                   <p className="text-xs text-muted leading-tight">
-                    Face verification and active blink liveness check with anti-spoof protection.
+                    Webcam positioning, face framing, and strict 3D head alignment check.
                   </p>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-border flex items-center justify-between">
                   <button
                     type="button"
-                    onClick={() => switchRole("candidate", "/candidate/identity")}
+                    onClick={() => switchRole("candidate", "/candidate/camera-setup")}
                     className="flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline"
                   >
                     <span>Open Live Screen</span>
@@ -1026,7 +1026,7 @@ export function DesignShowcasePage() {
                   else if (zoomedScreen === 4) switchRole("mentor", "/mentor/sessions/s1");
                   else if (zoomedScreen === 5) switchRole("candidate", "/candidate");
                   else if (zoomedScreen === 6) switchRole("candidate", "/candidate/instructions");
-                  else if (zoomedScreen === 7) switchRole("candidate", "/candidate/identity");
+                  else if (zoomedScreen === 7) switchRole("candidate", "/candidate/camera-setup");
                   else if (zoomedScreen === 8) switchRole("candidate", "/candidate/exam");
                   else if (zoomedScreen === 9) switchRole("admin", "/admin");
                   else if (zoomedScreen === 10) switchRole("admin", "/admin/users");

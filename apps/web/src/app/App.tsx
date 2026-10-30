@@ -150,14 +150,18 @@ export function App() {
         }
       />
       <Route
-        path="/candidate/identity"
+        path="/candidate/camera-setup"
         element={
           <RequireRole roles={["candidate"]}>
-            <AppShell nav={[]} title="Identity Verification">
+            <AppShell nav={[]} title="Camera Setup">
               <CandidateIdentityPage />
             </AppShell>
           </RequireRole>
         }
+      />
+      <Route
+        path="/candidate/identity"
+        element={<Navigate to="/candidate/camera-setup" replace />}
       />
       <Route
         path="/candidate/exam"

@@ -1,12 +1,11 @@
 import {
-  ArrowLeft,
   CheckCircle2,
   Clock,
   HelpCircle,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { Button } from "@/components/ui/button";
 import { getPersistedAssessments } from "@/lib/mockData";
@@ -22,25 +21,27 @@ export function CandidateInstructionsPage() {
 
   const [agreed, setAgreed] = useState(false);
 
+  // Prevent browser back navigation while entering the assessment
+  useEffect(() => {
+    window.history.pushState(null, "", window.location.href);
+    const handlePopState = () => {
+      window.history.pushState(null, "", window.location.href);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   const steps = [
     { num: 1, label: "Instructions", active: true, done: false },
     { num: 2, label: "System check", active: false, done: false },
-    { num: 3, label: "Identity verification", active: false, done: false },
-    { num: 4, label: "Camera setup", active: false, done: false },
-    { num: 5, label: "Start assessment", active: false, done: false },
+    { num: 3, label: "Camera setup", active: false, done: false },
+    { num: 4, label: "Start assessment", active: false, done: false },
   ];
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      {/* Top Header with Back Link */}
+      {/* Top Header without Back Link */}
       <div className="flex items-center gap-3">
-        <Link
-          to="/candidate"
-          className="flex size-8 items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors hover:bg-surface-muted hover:text-text"
-          aria-label="Back to dashboard"
-        >
-          <ArrowLeft className="size-4" />
-        </Link>
         <div>
           <h2 className="text-lg font-bold tracking-tight text-text">Assessment Instructions</h2>
           <p className="text-xs text-muted">Clear guidelines before starting your verified assessment.</p>
@@ -89,7 +90,7 @@ export function CandidateInstructionsPage() {
             <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted">
               <span className="flex items-center gap-1.5 font-medium text-text">
                 <HelpCircle className="size-3.5 text-primary-600" />
-                {exam?.questions || 40} questions
+                {exam?.questions ?? 0} questions
               </span>
               <span>•</span>
               <span className="flex items-center gap-1.5 font-medium text-text">
@@ -153,7 +154,7 @@ export function CandidateInstructionsPage() {
           <div className="flex justify-end pt-2">
             <Button
               disabled={!agreed}
-              onClick={() => navigate(`/candidate/identity?examId=${examId}`)}
+              onClick={() => navigate(`/candidate/camera-setup?examId=${examId}`)}
               className="bg-primary-600 text-white hover:bg-primary-700"
             >
               Next

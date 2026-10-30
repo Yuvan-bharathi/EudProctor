@@ -49,7 +49,7 @@ export function CandidateAssessmentsPage() {
         duration: `${a.duration_min} minutes`,
         questions: a.questions || 40,
         status: "scheduled" as const,
-        instructionsUrl: "/candidate/instructions",
+        instructionsUrl: `/candidate/instructions?examId=${a.id}`,
         requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
       };
     });

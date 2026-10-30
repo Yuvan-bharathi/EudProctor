@@ -1,10 +1,11 @@
-﻿import {
+import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
   CheckCircle2,
   Clock,
   Eye,
+  HelpCircle,
   Mail,
   Sparkles,
   X,
@@ -15,6 +16,7 @@ import { usePageTitle } from "@/app/layouts";
 import { Button } from "@/components/ui/button";
 import { getExamQuestions } from "@/lib/candidateExamQuestions";
 import { getPersistedAssessments, saveCandidateSubmission } from "@/lib/mockData";
+import type { Question } from "@/lib/types";
 
 export function CandidateExamPage() {
   usePageTitle("Assessment in Progress");
@@ -56,6 +58,26 @@ export function CandidateExamPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Prevent browser back navigation and accidental tab closure during the active assessment
+  useEffect(() => {
+    window.history.pushState(null, "", window.location.href);
+    const handlePopState = () => {
+      window.history.pushState(null, "", window.location.href);
+    };
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isSubmitted) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [isSubmitted]);
+
   const formatTimer = (secs: number) => {
     const h = String(Math.floor(secs / 3600)).padStart(2, "0");
     const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
@@ -65,7 +87,21 @@ export function CandidateExamPage() {
 
   // Current question data
   const currentIndex = Math.max(0, Math.min(currentQuestionNumber - 1, totalQuestions - 1));
-  const currentQuestionData = questions[currentIndex] || questions[0];
+  const currentQuestionData: Question = questions[currentIndex] || questions[0] || ({
+    id: "empty",
+    course_id: "c1",
+    topic_id: "t1",
+    subtopic: "",
+    type: "mcq",
+    difficulty: 1,
+    marks: 1,
+    body: "No question available",
+    options: [],
+    answer_text: "",
+    status: "approved",
+    source: "mentor",
+    agent_run_id: null,
+  } as Question);
   const isBookmarked = bookmarkedSet.has(currentQuestionNumber);
   const currentSelectedOption = answers[currentQuestionNumber] ?? null;
 
@@ -95,17 +131,20 @@ export function CandidateExamPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
-      {/* Top Bar matching Screen 8 & Image 2:
-          Title, Question X of 40, Timer, Flag counter (Flags 1 of 3) */}
+      {/* Top Bar matching Screen 8 & Image 2 */}
       <div className="flex flex-col justify-between gap-3 rounded-xl border border-border bg-surface px-5 py-3.5 shadow-2xs sm:flex-row sm:items-center">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-text">
-              {exam?.course || "Full Stack Development"} · {exam?.title || "Unit test 3"}
+              {exam?.course || "Full Stack Development"} · {exam?.title || "Assessment"}
             </span>
           </div>
           <div className="text-xs text-muted">
-            Question {currentQuestionNumber} of {totalQuestions} • {Math.floor(secondsRemaining / 60)} min left
+            {totalQuestions > 0 ? (
+              <>Question {currentQuestionNumber} of {totalQuestions} • {Math.floor(secondsRemaining / 60)} min left</>
+            ) : (
+              <>0 Questions configured</>
+            )}
           </div>
         </div>
 
@@ -116,8 +155,7 @@ export function CandidateExamPage() {
             <span>{formatTimer(secondsRemaining)}</span>
           </div>
 
-          {/* Flag Counter matching Image 2:
-              Three small dots + text "Flags 1 of 3" (first dot red, other two grey) */}
+          {/* Flag Counter */}
           <div
             className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${
               flagCount > 0 ? "bg-danger-50 text-danger-700 border border-danger-500/20" : "bg-surface-muted text-muted"
@@ -133,218 +171,239 @@ export function CandidateExamPage() {
         </div>
       </div>
 
-      {/* Calm Flag Notice Banner matching Image 1 & Image 2:
-          "Flag 1 of 3 - please keep your eyes on the screen." */}
-      {showBanner && flagCount > 0 && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex items-center justify-between rounded-xl border border-danger-500/30 bg-danger-50 px-4 py-3 text-xs text-danger-700 shadow-2xs animate-in fade-in"
-        >
-          <div className="flex items-center gap-2.5">
-            <Eye className="size-4 shrink-0 text-danger-500" />
-            <span className="font-medium">
-              Flag {flagCount} of 3 — please keep your eyes on the screen.
-            </span>
+      {/* Zero Questions State Notice */}
+      {totalQuestions === 0 ? (
+        <div className="rounded-xl border border-border bg-surface p-12 text-center space-y-4 shadow-2xs my-6">
+          <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary-50 text-primary-600">
+            <HelpCircle className="size-7" />
           </div>
-          <button
-            type="button"
-            onClick={() => setShowBanner(false)}
-            className="rounded p-0.5 text-danger-700/70 hover:text-danger-700"
-            aria-label="Dismiss banner"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* 2-Column Assessment Layout:
-          Left: Question Card & Options
-          Right: Question Navigation Palette (resolves the user's vertical line gap) */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
-        {/* Main Question Card matching Screen 8 */}
-        <div className="rounded-xl border border-border bg-surface p-6 shadow-2xs space-y-6">
-          {/* Question Header & Bookmark */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-primary-700">
-                Question {currentQuestionNumber}
-              </span>
-              {currentQuestionData.subtopic && (
-                <span className="rounded-md bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-muted">
-                  {currentQuestionData.subtopic}
-                </span>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={handleToggleBookmark}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                isBookmarked
-                  ? "bg-warning-50 text-warning-800 border border-warning-200"
-                  : "text-muted hover:bg-surface-muted hover:text-text border border-transparent"
-              }`}
-            >
-              <Bookmark className={`size-3.5 ${isBookmarked ? "fill-warning-500 text-warning-500" : ""}`} />
-              <span>{isBookmarked ? "Marked for review" : "Mark for review"}</span>
-            </button>
-          </div>
-
-          {/* Question Stem */}
-          <div className="text-base font-semibold leading-relaxed text-text">
-            {currentQuestionData.body}
-          </div>
-
-          {/* Radio Options A, B, C, D:
-              Defaults to NOT chosen (empty state), highlights on user selection */}
-          <div className="space-y-3">
-            {currentQuestionData.options.map((opt) => {
-              const isSelected = currentSelectedOption === opt.key;
-              return (
-                <label
-                  key={opt.key}
-                  onClick={() => handleSelectOption(opt.key)}
-                  className={`flex items-center gap-3.5 rounded-xl border p-4 text-xs font-medium transition-all cursor-pointer ${
-                    isSelected
-                      ? "border-primary-600 bg-primary-50/60 text-text shadow-2xs"
-                      : "border-border bg-surface text-text hover:border-border-strong hover:bg-surface-muted/40"
-                  }`}
-                >
-                  <div
-                    className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
-                      isSelected
-                        ? "bg-primary-600 text-white"
-                        : "border border-border bg-surface text-muted"
-                    }`}
-                  >
-                    {opt.key}
-                  </div>
-                  <span className="leading-relaxed">{opt.text}</span>
-                </label>
-              );
-            })}
-          </div>
-
-          {/* Bottom Navigation: Previous / Next / Finish */}
-          <div className="flex items-center justify-between border-t border-border pt-5">
-            <Button
-              variant="secondary"
-              onClick={() => setCurrentQuestionNumber((prev) => Math.max(1, prev - 1))}
-              disabled={currentQuestionNumber <= 1}
-              className="flex items-center gap-1.5 text-xs"
-            >
-              <ArrowLeft className="size-3.5" />
-              <span>Previous</span>
-            </Button>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setShowSubmitModal(true)}
-                className="text-xs text-muted hover:text-text"
-              >
-                Finish assessment
-              </Button>
-
-              <Button
-                onClick={() => {
-                  if (currentQuestionNumber < totalQuestions) {
-                    setCurrentQuestionNumber((prev) => prev + 1);
-                  } else {
-                    setShowSubmitModal(true);
-                  }
-                }}
-                className="flex items-center gap-1.5 bg-primary-600 text-white hover:bg-primary-700 text-xs"
-              >
-                <span>{currentQuestionNumber === totalQuestions ? "Review & Finish" : "Next"}</span>
-                <ArrowRight className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Sidebar: Question Palette & Overview (filling the vertical red line gap) */}
-        <div className="space-y-4">
-          <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-2.5">
-              <span className="text-xs font-bold uppercase tracking-wider text-text">Question Palette</span>
-              <span className="text-[11px] font-medium text-muted">
-                {answeredCount}/{totalQuestions} Answered
-              </span>
-            </div>
-
-            {/* Status Legend Pills */}
-            <div className="grid grid-cols-3 gap-1.5 text-center text-[10px]">
-              <div className="rounded-lg bg-primary-50 p-1.5 border border-primary-200">
-                <span className="block font-bold text-primary-700">{answeredCount}</span>
-                <span className="text-primary-800">Answered</span>
-              </div>
-              <div className="rounded-lg bg-surface-muted p-1.5 border border-border">
-                <span className="block font-bold text-text">{unansweredCount}</span>
-                <span className="text-muted">Unanswered</span>
-              </div>
-              <div className="rounded-lg bg-warning-50 p-1.5 border border-warning-200">
-                <span className="block font-bold text-warning-800">{bookmarkedSet.size}</span>
-                <span className="text-warning-800">Review</span>
-              </div>
-            </div>
-
-            {/* 1-40 Question Chips Grid */}
-            <div className="grid grid-cols-5 gap-1.5 max-h-[360px] overflow-y-auto pr-1">
-              {questions.map((_, idx) => {
-                const qNum = idx + 1;
-                const isCurrent = currentQuestionNumber === qNum;
-                const isAns = answers[qNum] !== undefined;
-                const isBook = bookmarkedSet.has(qNum);
-
-                return (
-                  <button
-                    key={qNum}
-                    type="button"
-                    onClick={() => setCurrentQuestionNumber(qNum)}
-                    className={`relative flex h-8 w-full items-center justify-center rounded-lg text-xs font-semibold transition-all ${
-                      isCurrent
-                        ? "ring-2 ring-primary-600 bg-primary-100 text-primary-900 font-bold shadow-2xs"
-                        : isAns
-                          ? "bg-primary-600 text-white hover:bg-primary-700"
-                          : isBook
-                            ? "border-2 border-warning-500 bg-warning-50 text-warning-900"
-                            : "border border-border bg-surface text-muted hover:border-border-strong hover:bg-surface-muted hover:text-text"
-                    }`}
-                  >
-                    <span>{qNum}</span>
-                    {isBook && (
-                      <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-warning-500 ring-1 ring-surface" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Quick Submit Action in Palette */}
-            <div className="border-t border-border pt-3">
-              <Button
-                onClick={() => setShowSubmitModal(true)}
-                className="w-full bg-primary-600 hover:bg-primary-700 text-white text-xs h-9"
-              >
-                Submit Assessment
-              </Button>
-            </div>
-          </div>
-
-          {/* Calm Proctoring Notice Box */}
-          <div className="rounded-xl border border-border bg-surface-muted/50 p-3.5 text-[11px] text-muted space-y-1">
-            <span className="font-semibold text-text flex items-center gap-1.5">
-              <CheckCircle2 className="size-3.5 text-success-600" />
-              Non-punitive integrity active
-            </span>
-            <p>
-              Your answers are securely auto-saved. Proctoring flags never disqualify or pause your session.
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-text">No Questions Configured</h3>
+            <p className="text-xs text-muted max-w-md mx-auto leading-relaxed">
+              This assessment does not have any questions assigned yet. Please contact your mentor or administrator.
             </p>
           </div>
+          <div className="pt-2">
+            <Button
+              onClick={() => navigate("/candidate/assessments")}
+              className="bg-primary-600 text-white hover:bg-primary-700 text-xs"
+            >
+              Return to Assessments
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* Calm Flag Notice Banner */}
+          {showBanner && flagCount > 0 && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center justify-between rounded-xl border border-danger-500/30 bg-danger-50 px-4 py-3 text-xs text-danger-700 shadow-2xs animate-in fade-in"
+            >
+              <div className="flex items-center gap-2.5">
+                <Eye className="size-4 shrink-0 text-danger-500" />
+                <span className="font-medium">
+                  Flag {flagCount} of 3 — please keep your eyes on the screen.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBanner(false)}
+                className="rounded p-0.5 text-danger-700/70 hover:text-danger-700 cursor-pointer"
+                aria-label="Dismiss banner"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* 2-Column Assessment Layout */}
+          <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+            {/* Main Question Card matching Screen 8 */}
+            <div className="rounded-xl border border-border bg-surface p-6 shadow-2xs space-y-6">
+              {/* Question Header & Bookmark */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-primary-700">
+                    Question {currentQuestionNumber}
+                  </span>
+                  {currentQuestionData.subtopic && (
+                    <span className="rounded-md bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-muted">
+                      {currentQuestionData.subtopic}
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleToggleBookmark}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+                    isBookmarked
+                      ? "bg-warning-50 text-warning-800 border border-warning-200"
+                      : "text-muted hover:bg-surface-muted hover:text-text border border-transparent"
+                  }`}
+                >
+                  <Bookmark className={`size-3.5 ${isBookmarked ? "fill-warning-500 text-warning-500" : ""}`} />
+                  <span>{isBookmarked ? "Marked for review" : "Mark for review"}</span>
+                </button>
+              </div>
+
+              {/* Question Stem */}
+              <div className="text-base font-semibold leading-relaxed text-text">
+                {currentQuestionData.body}
+              </div>
+
+              {/* Radio Options A, B, C, D */}
+              <div className="space-y-3">
+                {currentQuestionData.options?.map((opt) => {
+                  const isSelected = currentSelectedOption === opt.key;
+                  return (
+                    <label
+                      key={opt.key}
+                      onClick={() => handleSelectOption(opt.key)}
+                      className={`flex items-center gap-3.5 rounded-xl border p-4 text-xs font-medium transition-all cursor-pointer ${
+                        isSelected
+                          ? "border-primary-600 bg-primary-50/60 text-text shadow-2xs"
+                          : "border-border bg-surface text-text hover:border-border-strong hover:bg-surface-muted/40"
+                      }`}
+                    >
+                      <div
+                        className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
+                          isSelected
+                            ? "bg-primary-600 text-white"
+                            : "border border-border bg-surface text-muted"
+                        }`}
+                      >
+                        {opt.key}
+                      </div>
+                      <span className="leading-relaxed">{opt.text}</span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {/* Bottom Navigation */}
+              <div className="flex items-center justify-between border-t border-border pt-5">
+                <Button
+                  variant="secondary"
+                  onClick={() => setCurrentQuestionNumber((prev) => Math.max(1, prev - 1))}
+                  disabled={currentQuestionNumber <= 1}
+                  className="flex items-center gap-1.5 text-xs"
+                >
+                  <ArrowLeft className="size-3.5" />
+                  <span>Previous</span>
+                </Button>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowSubmitModal(true)}
+                    className="text-xs text-muted hover:text-text"
+                  >
+                    Finish assessment
+                  </Button>
+
+                  <Button
+                    onClick={() => {
+                      if (currentQuestionNumber < totalQuestions) {
+                        setCurrentQuestionNumber((prev) => prev + 1);
+                      } else {
+                        setShowSubmitModal(true);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 bg-primary-600 text-white hover:bg-primary-700 text-xs"
+                  >
+                    <span>{currentQuestionNumber === totalQuestions ? "Review & Finish" : "Next"}</span>
+                    <ArrowRight className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Sidebar: Question Palette & Overview */}
+            <div className="space-y-4">
+              <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs space-y-4">
+                <div className="flex items-center justify-between border-b border-border pb-2.5">
+                  <span className="text-xs font-bold uppercase tracking-wider text-text">Question Palette</span>
+                  <span className="text-[11px] font-medium text-muted">
+                    {answeredCount}/{totalQuestions} Answered
+                  </span>
+                </div>
+
+                {/* Status Legend Pills */}
+                <div className="grid grid-cols-3 gap-1.5 text-center text-[10px]">
+                  <div className="rounded-lg bg-primary-50 p-1.5 border border-primary-200">
+                    <span className="block font-bold text-primary-700">{answeredCount}</span>
+                    <span className="text-primary-800">Answered</span>
+                  </div>
+                  <div className="rounded-lg bg-surface-muted p-1.5 border border-border">
+                    <span className="block font-bold text-text">{unansweredCount}</span>
+                    <span className="text-muted">Unanswered</span>
+                  </div>
+                  <div className="rounded-lg bg-warning-50 p-1.5 border border-warning-200">
+                    <span className="block font-bold text-warning-800">{bookmarkedSet.size}</span>
+                    <span className="text-warning-800">Review</span>
+                  </div>
+                </div>
+
+                {/* Question Chips Grid */}
+                <div className="grid grid-cols-5 gap-1.5 max-h-[360px] overflow-y-auto pr-1">
+                  {questions.map((_, idx) => {
+                    const qNum = idx + 1;
+                    const isCurrent = currentQuestionNumber === qNum;
+                    const isAns = answers[qNum] !== undefined;
+                    const isBook = bookmarkedSet.has(qNum);
+
+                    return (
+                      <button
+                        key={qNum}
+                        type="button"
+                        onClick={() => setCurrentQuestionNumber(qNum)}
+                        className={`relative flex h-8 w-full items-center justify-center rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          isCurrent
+                            ? "ring-2 ring-primary-600 bg-primary-100 text-primary-900 font-bold shadow-2xs"
+                            : isAns
+                              ? "bg-primary-600 text-white hover:bg-primary-700"
+                              : isBook
+                                ? "border-2 border-warning-500 bg-warning-50 text-warning-900"
+                                : "border border-border bg-surface text-muted hover:border-border-strong hover:bg-surface-muted hover:text-text"
+                        }`}
+                      >
+                        <span>{qNum}</span>
+                        {isBook && (
+                          <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-warning-500 ring-1 ring-surface" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Quick Submit Action in Palette */}
+                <div className="border-t border-border pt-3">
+                  <Button
+                    onClick={() => setShowSubmitModal(true)}
+                    className="w-full bg-primary-600 hover:bg-primary-700 text-white text-xs h-9"
+                  >
+                    Submit Assessment
+                  </Button>
+                </div>
+              </div>
+
+              {/* Calm Proctoring Notice Box */}
+              <div className="rounded-xl border border-border bg-surface-muted/50 p-3.5 text-[11px] text-muted space-y-1">
+                <span className="font-semibold text-text flex items-center gap-1.5">
+                  <CheckCircle2 className="size-3.5 text-success-600" />
+                  Non-punitive integrity active
+                </span>
+                <p>
+                  Your answers are securely auto-saved. Proctoring flags never disqualify or pause your session.
+                </p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Submit Confirmation Modal */}
       {showSubmitModal && (
@@ -361,7 +420,7 @@ export function CandidateExamPage() {
                   <button
                     type="button"
                     onClick={() => setShowSubmitModal(false)}
-                    className="rounded p-1 text-muted hover:text-text"
+                    className="rounded p-1 text-muted hover:text-text cursor-pointer"
                   >
                     <X className="size-4" />
                   </button>
@@ -439,10 +498,10 @@ export function CandidateExamPage() {
                   </Button>
                   <Button
                     variant="secondary"
-                    onClick={() => navigate("/candidate")}
+                    onClick={() => navigate("/candidate/assessments")}
                     className="w-full sm:w-auto"
                   >
-                    Return to Dashboard
+                    Return to Assessments
                   </Button>
                 </div>
               </div>
@@ -453,4 +512,3 @@ export function CandidateExamPage() {
     </div>
   );
 }
-

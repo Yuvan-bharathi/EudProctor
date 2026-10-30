@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   CodingChallenge,
   CommunicationAssessment,
   DailyAttendance,
@@ -172,6 +172,7 @@ export function saveAssessmentToStorage(
 
   // Also initialize or update its exam detail
   if (initialDetail || !getStoredExamDetail(newCard.id)) {
+    const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(newCard.id);
     saveExamDetailToStorage(newCard.id, {
       id: newCard.id,
       course_id: "c1",
@@ -185,8 +186,8 @@ export function saveAssessmentToStorage(
       glance_min_s: 1,
       max_flags: 3,
       status: newCard.status === "completed" ? "closed" : newCard.status === "live" ? "scheduled" : "draft",
-      questions: mockQuestionsList,
-      assignments: mockAssignmentsList,
+      questions: isSeeded ? mockQuestionsList : [],
+      assignments: isSeeded ? mockAssignmentsList : [],
       ...initialDetail,
     });
   }
@@ -214,21 +215,26 @@ export function saveExamDetailToStorage<T = Record<string, unknown>>(examId: str
   const assessments = getPersistedAssessments();
   const baseCard = assessments.find((a) => a.id === examId) ?? assessments[0];
 
+  const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(examId);
+  const defaultQuestions = isSeeded ? mockQuestionsList : [];
+  const defaultAssignments = isSeeded ? mockAssignmentsList : [];
+
+  const detailObj = (detail as Record<string, unknown>) || {};
   const merged = {
     id: examId,
     course_id: existing?.course_id ?? "c1",
-    course_name: (detail as Record<string, unknown>)?.course_name ?? existing?.course_name ?? baseCard?.course ?? "Full Stack Development",
-    title: (detail as Record<string, unknown>)?.title ?? existing?.title ?? baseCard?.title ?? "New Assessment",
-    duration_min: (detail as Record<string, unknown>)?.duration_min ?? existing?.duration_min ?? baseCard?.duration_min ?? 60,
-    window_start: (detail as Record<string, unknown>)?.window_start ?? existing?.window_start ?? new Date().toISOString(),
-    window_end: (detail as Record<string, unknown>)?.window_end ?? existing?.window_end ?? new Date(Date.now() + 7 * 864e5).toISOString(),
-    shuffle: (detail as Record<string, unknown>)?.shuffle ?? existing?.shuffle ?? true,
-    flag_threshold_s: (detail as Record<string, unknown>)?.flag_threshold_s ?? existing?.flag_threshold_s ?? 3,
-    glance_min_s: (detail as Record<string, unknown>)?.glance_min_s ?? existing?.glance_min_s ?? 1,
-    max_flags: (detail as Record<string, unknown>)?.max_flags ?? existing?.max_flags ?? 3,
-    status: (detail as Record<string, unknown>)?.status ?? existing?.status ?? (baseCard?.status === "completed" ? "closed" : baseCard?.status === "live" ? "scheduled" : "draft"),
-    questions: (detail as Record<string, unknown>)?.questions ?? existing?.questions ?? mockQuestionsList,
-    assignments: (detail as Record<string, unknown>)?.assignments ?? existing?.assignments ?? mockAssignmentsList,
+    course_name: detailObj.course_name ?? existing?.course_name ?? baseCard?.course ?? "Full Stack Development",
+    title: detailObj.title ?? existing?.title ?? baseCard?.title ?? "New Assessment",
+    duration_min: detailObj.duration_min ?? existing?.duration_min ?? baseCard?.duration_min ?? 60,
+    window_start: detailObj.window_start ?? existing?.window_start ?? new Date().toISOString(),
+    window_end: detailObj.window_end ?? existing?.window_end ?? new Date(Date.now() + 7 * 864e5).toISOString(),
+    shuffle: detailObj.shuffle ?? existing?.shuffle ?? true,
+    flag_threshold_s: detailObj.flag_threshold_s ?? existing?.flag_threshold_s ?? 3,
+    glance_min_s: detailObj.glance_min_s ?? existing?.glance_min_s ?? 1,
+    max_flags: detailObj.max_flags ?? existing?.max_flags ?? 3,
+    status: detailObj.status ?? existing?.status ?? (baseCard?.status === "completed" ? "closed" : baseCard?.status === "live" ? "scheduled" : "draft"),
+    questions: detailObj.questions !== undefined ? detailObj.questions : (existing?.questions !== undefined ? existing.questions : defaultQuestions),
+    assignments: detailObj.assignments !== undefined ? detailObj.assignments : (existing?.assignments !== undefined ? existing.assignments : defaultAssignments),
     ...detail,
   };
 
