@@ -88,23 +88,24 @@ function handleMockRequest<T>(path: string, opts?: RequestOptions): T | undefine
       return stored as unknown as T;
     }
     const currentAssessments = getPersistedAssessments();
-    const baseCard = currentAssessments.find((a) => a.id === eid) ?? currentAssessments[0];
+    const baseCard = currentAssessments.find((a) => a.id === eid);
+    const isSeeded = ["ut-1", "ut-2", "ut-3", "ut-4", "ut-5"].includes(eid);
     const detail = {
-      id: baseCard.id,
+      id: baseCard?.id ?? eid,
       course_id: "c1",
-      course_name: baseCard.course,
-      title: baseCard.title,
-      duration_min: baseCard.duration_min,
+      course_name: baseCard?.course ?? "Full Stack Development",
+      title: baseCard?.title ?? "Assessment",
+      duration_min: baseCard?.duration_min ?? 60,
       window_start: "2026-01-15T10:00:00Z",
       window_end: "2026-01-15T11:00:00Z",
       shuffle: true,
       flag_threshold_s: 3,
       glance_min_s: 1,
       max_flags: 3,
-      status: baseCard.status === "completed" ? "closed" : (baseCard.status === "live" || baseCard.status === "scheduled") ? "scheduled" : "draft",
-      card_status: baseCard.status,
-      questions: mockQuestionsList,
-      assignments: mockAssignmentsList,
+      status: baseCard?.status === "completed" ? "closed" : (baseCard?.status === "live" || baseCard?.status === "scheduled") ? "scheduled" : "draft",
+      card_status: baseCard?.status ?? "draft",
+      questions: isSeeded ? mockQuestionsList : [],
+      assignments: isSeeded ? mockAssignmentsList : [],
     };
     saveExamDetailToStorage(eid, detail);
     return detail as unknown as T;
@@ -253,14 +254,40 @@ async function refreshTokens(): Promise<boolean> {
   }
 }
 
-export async function api<T>(path: string, opts: RequestOptions = {}, retried = false): Promise<T> {
-  const token = authStore.get()?.access_token;
-
-  if (token?.startsWith("mock-")) {
-    const mockData = handleMockRequest<T>(path, opts);
-    if (mockData !== undefined) {
-      return mockData;
+async function getOrUpgradeToken(): Promise<string | undefined> {
+  const current = authStore.get();
+  if (!current) return undefined;
+  if (!current.access_token.startsWith("mock-")) {
+    return current.access_token;
+  }
+  const role = current.user?.role || "mentor";
+  const demoEmail =
+    role === "admin"
+      ? "admin@example.com"
+      : role === "candidate"
+        ? "candidate01@example.com"
+        : "mentor1@example.com";
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: demoEmail, password: "eduproctor-dev" }),
+    });
+    if (res.ok) {
+      const realAuth = await res.json();
+      authStore.set(realAuth);
+      return realAuth.access_token;
     }
+  } catch {
+    // fallback
+  }
+  return current.access_token;
+}
+
+export async function api<T>(path: string, opts: RequestOptions = {}, retried = false): Promise<T> {
+  let token = authStore.get()?.access_token;
+  if (token?.startsWith("mock-") && opts.auth !== false) {
+    token = (await getOrUpgradeToken()) ?? token;
   }
 
   const headers: Record<string, string> = {};
@@ -276,20 +303,17 @@ export async function api<T>(path: string, opts: RequestOptions = {}, retried = 
     });
 
     if (res.status === 401) {
-      if (token?.startsWith("mock-")) {
-        const mockFallback = handleMockRequest<T>(path);
-        if (mockFallback !== undefined) return mockFallback;
-        return [] as unknown as T;
-      }
       if (!retried && opts.auth !== false && (await refreshTokens())) {
         return api<T>(path, opts, true);
       }
+      const mockFallback = handleMockRequest<T>(path, opts);
+      if (mockFallback !== undefined) return mockFallback;
     }
 
     if (!res.ok) {
-      if (token?.startsWith("mock-")) {
-        const mockFallback = handleMockRequest<T>(path);
-        if (mockFallback !== undefined) return mockFallback;
+      const mockFallback = handleMockRequest<T>(path, opts);
+      if (mockFallback !== undefined && (res.status === 404 || res.status === 501)) {
+        return mockFallback;
       }
       let detail: unknown = res.statusText;
       try {
@@ -303,10 +327,9 @@ export async function api<T>(path: string, opts: RequestOptions = {}, retried = 
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   } catch (err) {
-    if (token?.startsWith("mock-")) {
-      const mockFallback = handleMockRequest<T>(path);
-      if (mockFallback !== undefined) return mockFallback;
-      return [] as unknown as T;
+    const mockFallback = handleMockRequest<T>(path, opts);
+    if (mockFallback !== undefined) {
+      return mockFallback;
     }
     throw err;
   }

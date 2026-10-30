@@ -6,7 +6,14 @@ Status changes only through `transition()`. Auto-submit happens ONLY when the de
 
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -95,12 +102,12 @@ def begin(db: Session, sess: ExamSession) -> None:
     """Start the clock: calibrating -> in_progress."""
     now = utcnow()
     exam = sess.exam
-    if now >= exam.window_end:
+    if now >= _ensure_utc(exam.window_end):
         transition(db, sess, S.expired, "window closed")
         raise HTTPException(409, "The assessment window has closed.")
     transition(db, sess, S.in_progress, "candidate started")
     sess.started_at = now
-    sess.deadline_at = min(now + timedelta(minutes=exam.duration_min), exam.window_end)
+    sess.deadline_at = min(now + timedelta(minutes=exam.duration_min), _ensure_utc(exam.window_end))
     from app.services.identity import schedule_random_checks  # local import: identity depends on this module
 
     schedule_random_checks(sess)
@@ -110,7 +117,7 @@ def submit(db: Session, sess: ExamSession, reason: SubmitReason) -> None:
     if sess.status != S.in_progress:
         return  # idempotent
     transition(db, sess, S.submitted, reason.value)
-    sess.submitted_at = min(utcnow(), sess.deadline_at) if reason == SubmitReason.deadline else utcnow()
+    sess.submitted_at = min(utcnow(), _ensure_utc(sess.deadline_at)) if reason == SubmitReason.deadline else utcnow()
     sess.submit_reason = reason
     from app.scoring.service import on_submitted  # local import: scoring uses transition() from this module
 
@@ -123,7 +130,7 @@ def enforce_deadline(db: Session, sess: ExamSession, now: datetime | None = None
     if sess.status == S.in_progress and sess.deadline_at and now >= sess.deadline_at:
         submit(db, sess, SubmitReason.deadline)
         return True
-    if sess.status in ACTIVE - {S.in_progress} and now >= sess.exam.window_end:
+    if sess.status in ACTIVE - {S.in_progress} and now >= _ensure_utc(sess.exam.window_end):
         sess.status = S.expired
         audit.record(
             db,

@@ -36,25 +36,38 @@ export function LoginPage() {
     }
   }
 
-  const quickDemoLogin = (r: Role) => {
-    const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
-      mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Priya Sharma" },
-      candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Arjun Mehta" },
-      admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
+  const quickDemoLogin = async (r: Role) => {
+    const demoCreds: Record<Role, { email: string; pass: string }> = {
+      mentor: { email: "mentor1@example.com", pass: "eduproctor-dev" },
+      candidate: { email: "candidate01@example.com", pass: "eduproctor-dev" },
+      admin: { email: "admin@example.com", pass: "eduproctor-dev" },
     };
-    const targetUser = mockUsers[r];
-    authStore.set({
-      access_token: `mock-${r}-token`,
-      refresh_token: `mock-${r}-refresh`,
-      user: {
-        id: targetUser.id,
-        email: targetUser.email,
-        name: targetUser.name,
-        role: r,
-        is_active: true,
-      },
-    });
-    navigate(safeNext ?? roleHome[r]);
+    const cred = demoCreds[r];
+    try {
+      const res = await api<AuthState>("/auth/login", { body: { email: cred.email, password: cred.pass }, auth: false });
+      authStore.set(res);
+      navigate(safeNext ?? roleHome[res.user.role]);
+      return;
+    } catch {
+      const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
+        mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Mentor Asha" },
+        candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Bela Sato" },
+        admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
+      };
+      const targetUser = mockUsers[r];
+      authStore.set({
+        access_token: `mock-${r}-token`,
+        refresh_token: `mock-${r}-refresh`,
+        user: {
+          id: targetUser.id,
+          email: targetUser.email,
+          name: targetUser.name,
+          role: r,
+          is_active: true,
+        },
+      });
+      navigate(safeNext ?? roleHome[r]);
+    }
   };
 
   return (
@@ -110,16 +123,7 @@ export function LoginPage() {
               <span>Admin</span>
             </Button>
           </div>
-          <div className="pt-1 text-center">
-            <Link
-              to="/design-showcase"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-ai-700 hover:underline"
-            >
-              <Sparkles className="size-3.5 text-ai-500" />
-              <span>Or inspect all 12 UI Boards in Showcase</span>
-            </Link>
           </div>
-        </div>
 
         {/* Standard Credentials Form */}
         <form onSubmit={submit} className="space-y-4" noValidate>

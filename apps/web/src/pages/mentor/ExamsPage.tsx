@@ -70,11 +70,21 @@ export function ExamsPage() {
     retry: 1,
   });
 
+  const coursesQuery = useQuery({
+    queryKey: ["courses"],
+    queryFn: () => api<{ id: string; name: string; code: string }[]>("/courses"),
+  });
+
   const create = useMutation({
-    mutationFn: () =>
-      api<Exam>("/exams", {
+    mutationFn: async () => {
+      const matched = coursesQuery.data?.find(
+        (c) => c.id === courseId || c.name.toLowerCase() === courseId.toLowerCase()
+      ) ?? coursesQuery.data?.[0];
+      const targetCourseId = matched?.id || courseId;
+
+      return api<Exam>("/exams", {
         body: {
-          course_id: courseId,
+          course_id: targetCourseId,
           title,
           duration_min: duration,
           window_start: new Date(start).toISOString(),
@@ -82,7 +92,8 @@ export function ExamsPage() {
           shuffle,
           flag_threshold_s: threshold,
         },
-      }),
+      });
+    },
     onSuccess: (exam) => {
       const newCard = {
         id: exam?.id ?? `ut-${Date.now()}`,
@@ -92,7 +103,7 @@ export function ExamsPage() {
         questions: 0,
         duration_min: duration,
         total: 0,
-        createdBy: isLocationAdmin ? "System Admin" : "Priya Sharma (Tech Lead)",
+        createdBy: isLocationAdmin ? "System Admin" : "Mentor Asha",
         createdDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
         targetRole: courseId,
       };

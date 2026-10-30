@@ -2,7 +2,7 @@
 
 import hashlib
 import secrets
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -13,6 +13,14 @@ from app.core.security import sign_value
 from app.models import Exam, ExamAssignment, User
 from app.models.base import utcnow
 from app.services.mailer import send_mail
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
 
 
 def token_hash(token: str) -> str:
@@ -26,7 +34,8 @@ def issue_link(db: Session, exam: Exam, assignment: ExamAssignment, candidate: U
     token = secrets.token_urlsafe(32)
     now = utcnow()
     assignment.link_token_hash = token_hash(token)
-    assignment.link_expires_at = min(exam.window_end, now + timedelta(hours=s.link_ttl_hours))
+    window_end = _ensure_utc(exam.window_end)
+    assignment.link_expires_at = min(window_end, now + timedelta(hours=s.link_ttl_hours))
     assignment.link_sent_at = now
     assignment.link_used_at = None
     url = f"{s.web_base_url}/join/{token}"
@@ -53,10 +62,12 @@ def redeem_link(db: Session, token: str, user: User) -> ExamAssignment:
     if assignment.link_used_at is not None:
         raise HTTPException(status.HTTP_410_GONE, "This link has already been used.")
     now = utcnow()
-    if assignment.link_expires_at is None or assignment.link_expires_at <= now:
+    expires_at = _ensure_utc(assignment.link_expires_at)
+    if expires_at is None or expires_at <= now:
         raise HTTPException(status.HTTP_410_GONE, "This link has expired.")
     exam = assignment.exam
-    if now < exam.window_start:
+    window_start = _ensure_utc(exam.window_start)
+    if window_start is not None and now < window_start:
         raise HTTPException(status.HTTP_409_CONFLICT, "This assessment has not opened yet.")
     assignment.link_used_at = now
     return assignment

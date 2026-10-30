@@ -118,31 +118,50 @@ export function AppShell({
     return roleLabel[role];
   };
 
-  const handleRoleSwitch = (role: Role) => {
+  const handleRoleSwitch = async (role: Role) => {
     setRoleMenuOpen(false);
-    const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
-      mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Priya Sharma" },
-      candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Arjun Mehta" },
-      admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
+    const demoCreds: Record<Role, { email: string; pass: string }> = {
+      mentor: { email: "mentor1@example.com", pass: "eduproctor-dev" },
+      candidate: { email: "candidate01@example.com", pass: "eduproctor-dev" },
+      admin: { email: "admin@example.com", pass: "eduproctor-dev" },
     };
-    const targetUser = mockUsers[role];
-    authStore.set({
-      access_token: `mock-${role}-token`,
-      refresh_token: `mock-${role}-refresh`,
-      user: {
-        id: targetUser.id,
-        email: targetUser.email,
-        name: targetUser.name,
-        role,
-        is_active: true,
-      },
-    });
-    if (activeModule === "internship") {
-      if (role === "admin") navigate("/admin/internship");
-      else if (role === "candidate") navigate("/candidate/internship");
-      else navigate("/mentor/internship");
-    } else {
-      navigate(roleHome[role]);
+    const cred = demoCreds[role];
+    try {
+      const res = await api<AuthState>("/auth/login", { body: { email: cred.email, password: cred.pass }, auth: false });
+      authStore.set(res);
+      if (activeModule === "internship") {
+        if (role === "admin") navigate("/admin/internship");
+        else if (role === "candidate") navigate("/candidate/internship");
+        else navigate("/mentor/internship");
+      } else {
+        navigate(roleHome[role]);
+      }
+      return;
+    } catch {
+      const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
+        mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Mentor Asha" },
+        candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Bela Sato" },
+        admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
+      };
+      const targetUser = mockUsers[role];
+      authStore.set({
+        access_token: `mock-${role}-token`,
+        refresh_token: `mock-${role}-refresh`,
+        user: {
+          id: targetUser.id,
+          email: targetUser.email,
+          name: targetUser.name,
+          role,
+          is_active: true,
+        },
+      });
+      if (activeModule === "internship") {
+        if (role === "admin") navigate("/admin/internship");
+        else if (role === "candidate") navigate("/candidate/internship");
+        else navigate("/mentor/internship");
+      } else {
+        navigate(roleHome[role]);
+      }
     }
   };
 
