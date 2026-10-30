@@ -7,7 +7,6 @@ import {
   type LucideIcon,
   Rocket,
   Search,
-  Sparkles,
   Target,
   UserCheck,
 } from "lucide-react";
@@ -175,35 +174,6 @@ export function AppShell({
         <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
           <div className="mb-1 px-3 text-[11px] font-medium uppercase tracking-wider text-muted">Menu</div>
           <NavLinks nav={activeNav} />
-
-          <div className="my-3 border-t border-border" />
-
-          {/* Quick Showcase & Styleguide links */}
-          <div className="px-3 text-[11px] font-medium uppercase tracking-wider text-muted">Prototypes</div>
-          <NavLink
-            to="/design-showcase"
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
-                isActive ? "bg-ai-50 text-ai-700 font-semibold" : "text-muted hover:bg-surface-muted hover:text-text",
-              )
-            }
-          >
-            <Sparkles className="size-4 text-ai-500" />
-            <span>UI Design Showcase</span>
-          </NavLink>
-          <NavLink
-            to="/styleguide"
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs transition-colors",
-                isActive ? "bg-primary-50 text-primary-700 font-semibold" : "text-muted hover:bg-surface-muted hover:text-text",
-              )
-            }
-          >
-            <span className="size-2 rounded-full bg-primary-500" />
-            <span>Soft Mist Styleguide</span>
-          </NavLink>
         </nav>
 
         {/* Sidebar Footer / User Info - ALWAYS pinned at the bottom of the sidebar */}
@@ -334,15 +304,7 @@ export function AppShell({
                       {currentRole === r && <Check className="size-3.5 text-primary-600" />}
                     </button>
                   ))}
-                  <div className="my-1 border-t border-border" />
-                  <Link
-                    to="/design-showcase"
-                    onClick={() => setRoleMenuOpen(false)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ai-700 hover:bg-ai-50"
-                  >
-                    <Sparkles className="size-3.5 text-ai-500" />
-                    <span>View 12 UI Boards</span>
-                  </Link>
+
                 </div>
               )}
             </div>

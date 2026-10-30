@@ -13,7 +13,6 @@ import { CandidateProfilePage } from "@/pages/candidate/CandidateProfilePage";
 import { CandidateResultsViewPage } from "@/pages/candidate/CandidateResultsViewPage";
 import { JoinPage } from "@/pages/candidate/JoinPage";
 import { SessionPage } from "@/pages/candidate/SessionPage";
-import { DesignShowcasePage } from "@/pages/DesignShowcasePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { CandidateResultPage } from "@/pages/mentor/CandidateResultPage";
 import { ExamDetailPage } from "@/pages/mentor/ExamDetailPage";
@@ -24,7 +23,6 @@ import { MarkingPage } from "@/pages/mentor/MarkingPage";
 import { MentorHomePage } from "@/pages/mentor/MentorHomePage";
 import { QuestionBankPage } from "@/pages/mentor/QuestionBankPage";
 import { SessionDetailsPage } from "@/pages/mentor/SessionDetailsPage";
-import { StyleguidePage } from "@/pages/StyleguidePage";
 import { AdminAttendanceAuditPage } from "@/pages/internship/admin/AdminAttendanceAuditPage";
 import { AdminCodingBankPage } from "@/pages/internship/admin/AdminCodingBankPage";
 import { AdminCohortsPage } from "@/pages/internship/admin/AdminCohortsPage";
@@ -52,27 +50,10 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<RoleRedirect />} />
 
-      {/* Interactive Design Showcase & Styleguide */}
-      <Route
-        path="/design-showcase"
-        element={
-          <AppShell title="UI Design Showcase">
-            <DesignShowcasePage />
-          </AppShell>
-        }
-      />
-      <Route
-        path="/showcase"
-        element={<Navigate to="/design-showcase" replace />}
-      />
-      <Route
-        path="/styleguide"
-        element={
-          <AppShell title="Soft Mist Styleguide">
-            <StyleguidePage />
-          </AppShell>
-        }
-      />
+      {/* Legacy prototype routes redirect */}
+      <Route path="/design-showcase" element={<Navigate to="/" replace />} />
+      <Route path="/showcase" element={<Navigate to="/" replace />} />
+      <Route path="/styleguide" element={<Navigate to="/" replace />} />
 
       {/* Admin Portal */}
       <Route path="/admin" element={<RoleLayout role="admin" />}>
