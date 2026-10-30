@@ -95,22 +95,9 @@ export function ExamsPage() {
       });
     },
     onSuccess: (exam) => {
-      const newCard = {
-        id: exam?.id ?? `ut-${Date.now()}`,
-        title,
-        course: courseId || "Full Stack Development",
-        status: "draft" as const,
-        questions: 0,
-        duration_min: duration,
-        total: 0,
-        createdBy: isLocationAdmin ? "System Admin" : "Mentor Asha",
-        createdDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
-        targetRole: courseId,
-      };
-      saveAssessmentToStorage(newCard, { questions: [], assignments: [] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setModalOpen(false);
-      navigate(`${baseExamPath}/${newCard.id}`);
+      navigate(`${baseExamPath}/${exam.id}`);
     },
   });
 
@@ -119,30 +106,35 @@ export function ExamsPage() {
     create.mutate();
   }
 
-  // Combine real backend data or fallback to design mock data
-  const assessments = examsQuery.data?.length
-    ? examsQuery.data.map((e) => {
-        const rawCardStatus = (e as unknown as { card_status?: FilterTab }).card_status;
-        const mappedStatus: FilterTab =
-          rawCardStatus ??
-          (e.status === "closed" ? "completed" : e.status === "scheduled" ? "scheduled" : "draft");
+  // Pure TiDB Cloud backend assessments - zero mockData / localStorage leakage
+  const assessments = (examsQuery.data ?? []).map((e) => {
+    const rawCardStatus = (e as unknown as { card_status?: FilterTab }).card_status;
+    const mappedStatus: FilterTab =
+      rawCardStatus ??
+      (e.status === "closed" ? "completed" : e.status === "scheduled" ? "scheduled" : "draft");
 
-        return {
-          id: e.id,
-          title: e.title,
-          course: (e as unknown as { course_name?: string }).course_name ?? "Full Stack Development",
-          status: mappedStatus,
-          questions: (e as unknown as { question_count?: number }).question_count ?? 40,
-          duration_min: e.duration_min ?? (e as unknown as { duration_minutes?: number }).duration_minutes ?? 60,
-          started: (e as unknown as { sessions_count?: number }).sessions_count ?? 28,
-          submitted: (e as unknown as { completed_count?: number }).completed_count ?? 45,
-          total: (e as unknown as { candidates_count?: number }).candidates_count ?? 45,
-          createdBy: "Priya Sharma",
-          createdDate: "12 Jan 2026",
-          targetRole: (e as unknown as { course_name?: string }).course_name ?? "Full Stack Development",
-        };
-      })
-    : mockAssessments;
+    const courseName = (e as unknown as { course_name?: string }).course_name || "Full Stack Development";
+    const createdBy = (e as unknown as { created_by?: string }).created_by || "Mentor";
+    const rawCreated = (e as unknown as { created_at?: string }).created_at;
+    const createdDate = rawCreated
+      ? new Date(rawCreated).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+      : "Active";
+
+    return {
+      id: e.id,
+      title: e.title,
+      course: courseName,
+      status: mappedStatus,
+      questions: (e as unknown as { question_count?: number }).question_count ?? 0,
+      duration_min: e.duration_min ?? 60,
+      started: (e as unknown as { sessions_count?: number }).sessions_count ?? 0,
+      submitted: (e as unknown as { completed_count?: number }).completed_count ?? 0,
+      total: (e as unknown as { candidates_count?: number }).candidates_count ?? 0,
+      createdBy,
+      createdDate,
+      targetRole: courseName,
+    };
+  });
 
   const filteredAssessments = assessments.filter((a) => {
     if (activeTab === "all") return true;

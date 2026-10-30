@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.core.audit import Actor, set_actor
@@ -11,15 +11,18 @@ from app.core.security import decode_token
 from app.models import Role, User
 
 _bearer = HTTPBearer(auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
 
 
 def get_current_user(
     cred: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    token_oauth: str | None = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    if cred is None:
+    raw_token = cred.credentials if cred else token_oauth
+    if not raw_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-    payload = decode_token(cred.credentials, "access")
+    payload = decode_token(raw_token, "access")
     if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
     user = db.get(User, uuid.UUID(payload["sub"]))

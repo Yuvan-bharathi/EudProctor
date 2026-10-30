@@ -172,7 +172,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     }
   }, [exam, examId]);
 
-  const handlePublishAndSchedule = (e: FormEvent) => {
+  const handlePublishAndSchedule = async (e: FormEvent) => {
     e.preventDefault();
     setIsPublishing(true);
 
@@ -186,23 +186,32 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         year: "numeric",
       }) + `, ${scheduleStartTime} – ${scheduleEndTime}`;
 
-    const res = publishAndScheduleAssessment(examId, {
-      scheduledDate: formattedDate,
-      windowStart: startIso,
-      windowEnd: endIso,
-      sendTestLinkEmails,
-    });
+    try {
+      await api(`/exams/${examId}`, {
+        method: "PATCH",
+        body: {
+          window_start: startIso,
+          window_end: endIso,
+          status: "scheduled",
+        },
+      });
 
-    setAssessmentStatus(res.assessment.status);
-    setAssessmentCard(res.assessment);
-    qc.invalidateQueries({ queryKey: ["exam", examId] });
-    qc.invalidateQueries({ queryKey: ["exams"] });
-    setIsPublishing(false);
-    setPublishModalOpen(false);
+      let sentCount = 0;
+      if (sendTestLinkEmails) {
+        const linksRes = await api<Assignment[]>(`/exams/${examId}/send-links`, { body: {} });
+        sentCount = linksRes?.length || 0;
+      }
 
-    showToast(
-      `Assessment scheduled for ${formattedDate}! AI Email Sending Agent dispatched test links to ${res.dispatchedEmailsCount} candidate(s).`
-    );
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      qc.invalidateQueries({ queryKey: ["exams"] });
+      setAssessmentStatus("scheduled");
+      setIsPublishing(false);
+      setPublishModalOpen(false);
+      showToast(`Assessment published in TiDB Cloud! Dispatched test links to ${sentCount} candidate(s).`);
+    } catch (err) {
+      setIsPublishing(false);
+      showToast(errorMessage(err));
+    }
   };
 
   // Sync state whenever exam data loads or changes from storage/query
@@ -430,63 +439,40 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     setCustomQuestionModalOpen(true);
   };
 
-  const handleSaveCustomQuestion = (e: FormEvent) => {
+  const handleSaveCustomQuestion = async (e: FormEvent) => {
     e.preventDefault();
     if (!customBody.trim() || !customOptionA.trim() || !customOptionB.trim()) return;
 
-    if (editingQuestionId) {
-      // Update existing question
-      const updated = questions.map((q) => {
-        if (q.id === editingQuestionId) {
-          return {
-            ...q,
-            body: customBody.trim(),
-            subtopic: customTopic.trim(),
-            marks: customMarks,
-            difficulty: customDifficulty,
-            answer_text: customExplanation.trim() || null,
-            options: [
-              { id: `${q.id}-opt-a`, key: "A", text: customOptionA.trim(), is_correct: customCorrectKey === "A", misconception_id: null },
-              { id: `${q.id}-opt-b`, key: "B", text: customOptionB.trim(), is_correct: customCorrectKey === "B", misconception_id: null },
-              { id: `${q.id}-opt-c`, key: "C", text: customOptionC.trim(), is_correct: customCorrectKey === "C", misconception_id: null },
-              { id: `${q.id}-opt-d`, key: "D", text: customOptionD.trim(), is_correct: customCorrectKey === "D", misconception_id: null },
-            ],
-          };
-        }
-        return q;
+    try {
+      const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
+        body: {
+          questions: [
+            {
+              body: customBody.trim(),
+              difficulty: customDifficulty,
+              marks: customMarks,
+              subtopic: customTopic.trim() || exam?.course_name || "General",
+              explanation: customExplanation.trim() || undefined,
+              options: [
+                { key: "A", text: customOptionA.trim(), is_correct: customCorrectKey === "A" },
+                { key: "B", text: customOptionB.trim(), is_correct: customCorrectKey === "B" },
+                { key: "C", text: customOptionC.trim(), is_correct: customCorrectKey === "C" },
+                { key: "D", text: customOptionD.trim(), is_correct: customCorrectKey === "D" },
+              ],
+            },
+          ],
+        },
       });
-      setQuestions(updated);
-      saveExamDetailToStorage(examId, { questions: updated });
-      showToast("Question updated successfully.");
-    } else {
-      // Create new question
-      const newQuestion: Question = {
-        id: `q-custom-${Date.now()}`,
-        course_id: "c1",
-        topic_id: "t1",
-        subtopic: customTopic.trim() || exam?.course_name || "Full Stack Development",
-        type: "mcq",
-        difficulty: customDifficulty,
-        marks: customMarks,
-        body: customBody.trim(),
-        answer_text: customExplanation.trim() || null,
-        status: "approved",
-        source: "mentor",
-        agent_run_id: null,
-        options: [
-          { id: `opt-a-${Date.now()}`, key: "A", text: customOptionA.trim(), is_correct: customCorrectKey === "A", misconception_id: null },
-          { id: `opt-b-${Date.now()}`, key: "B", text: customOptionB.trim(), is_correct: customCorrectKey === "B", misconception_id: null },
-          { id: `opt-c-${Date.now()}`, key: "C", text: customOptionC.trim(), is_correct: customCorrectKey === "C", misconception_id: null },
-          { id: `opt-d-${Date.now()}`, key: "D", text: customOptionD.trim(), is_correct: customCorrectKey === "D", misconception_id: null },
-        ],
-      };
-      const updated = [newQuestion, ...questions];
-      setQuestions(updated);
-      saveExamDetailToStorage(examId, { questions: updated });
-      showToast("Custom question added to assessment.");
+      if (res?.questions) {
+        setQuestions(res.questions);
+      }
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      qc.invalidateQueries({ queryKey: ["exams"] });
+      setCustomQuestionModalOpen(false);
+      showToast("Question saved directly to TiDB Cloud.");
+    } catch (err) {
+      showToast(errorMessage(err));
     }
-
-    setCustomQuestionModalOpen(false);
   };
 
   const handleDeleteQuestion = (questionId: string) => {
@@ -549,14 +535,35 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     }
   };
 
-  const handleImportParsedExcelQuestions = () => {
+  const handleImportParsedExcelQuestions = async () => {
     if (parsedExcelRows.length === 0) return;
-    const converted = convertToQuestions(parsedExcelRows, "c1");
-    const updated = [...converted, ...questions];
-    setQuestions(updated);
-    saveExamDetailToStorage(examId, { questions: updated });
-    setExcelModalOpen(false);
-    showToast(`Successfully imported ${converted.length} question(s) from Excel.`);
+    try {
+      const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
+        body: {
+          questions: parsedExcelRows.map((r) => ({
+            body: r.body,
+            difficulty: r.difficulty,
+            marks: r.marks,
+            subtopic: r.topic,
+            explanation: r.explanation,
+            options: r.options.map((opt) => ({
+              key: opt.key,
+              text: opt.text,
+              is_correct: opt.is_correct,
+            })),
+          })),
+        },
+      });
+      if (res?.questions) {
+        setQuestions(res.questions);
+      }
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      qc.invalidateQueries({ queryKey: ["exams"] });
+      setExcelModalOpen(false);
+      showToast(`Successfully saved ${parsedExcelRows.length} question(s) directly to TiDB Cloud.`);
+    } catch (err) {
+      showToast(errorMessage(err));
+    }
   };
 
   // Candidates Actions: Excel Upload

@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,18 @@ def _tokens(user: User) -> TokenOut:
         refresh_token=create_token(user.id, user.role.value, "refresh"),
         user=UserOut.model_validate(user),
     )
+
+
+@public.post("/token", response_model=TokenOut)
+def oauth2_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> TokenOut:
+    """Standard OAuth 2.0 Password Grant token endpoint (RFC 6749)."""
+    user = db.scalar(select(User).where(User.email == form_data.username.lower()))
+    ok = verify_password(form_data.password, user.password_hash if user else DUMMY_HASH)
+    if user is None or not user.is_active or not ok:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Email or password is incorrect")
+    audit.record(db, "auth.login", "users", user.id, actor=audit.Actor("user", str(user.id)))
+    db.commit()
+    return _tokens(user)
 
 
 @public.post("/login", response_model=TokenOut)

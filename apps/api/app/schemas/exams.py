@@ -138,6 +138,11 @@ class ExamOut(ORM):
     glance_min_s: float
     max_flags: int
     status: ExamStatus
+    course_name: str | None = None
+    created_by: str | None = None
+    question_count: int = 0
+    candidates_count: int = 0
+    created_at: datetime | None = None
 
 
 class ExamQuestionsIn(BaseModel):
@@ -175,3 +180,35 @@ class JoinOut(BaseModel):
     exam_title: str
     duration_min: int
     session_id: uuid.UUID | None = None
+
+
+class ImportedOptionIn(BaseModel):
+    key: str
+    text: str
+    is_correct: bool = False
+
+
+class ImportedQuestionIn(BaseModel):
+    body: str
+    options: list[ImportedOptionIn]
+    difficulty: int = 2
+    marks: float = 1.0
+    subtopic: str | None = None
+    explanation: str | None = None
+
+
+class ImportQuestionsIn(BaseModel):
+    questions: list[ImportedQuestionIn]
+
+
+class ImportedCandidateIn(BaseModel):
+    name: str
+    email: str
+    phone: str | None = None
+    rollNumber: str | None = None
+    batch: str | None = None
+    department: str | None = None
+
+
+class ImportCandidatesIn(BaseModel):
+    candidates: list[ImportedCandidateIn]
