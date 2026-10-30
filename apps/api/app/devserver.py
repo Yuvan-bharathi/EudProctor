@@ -21,7 +21,8 @@ def main() -> None:
 
     if "mysql" in configured_url or "tidb" in configured_url:
         print(f"Connecting devserver to TiDB Cloud / MySQL: {configured_url.split('@')[-1]}")
-        from app.core.db import Base, get_engine
+        from app.models.base import Base
+        from app.core.db import get_engine
         Base.metadata.create_all(get_engine())
     else:
         from app.devdb import local_postgres, migrate
@@ -29,6 +30,9 @@ def main() -> None:
             os.environ.get("DEV_DB_NAME", "eduproctor"), fresh=os.environ.get("DEV_RESET") == "1"
         )
         os.environ["DATABASE_URL"] = url
+        get_settings.cache_clear()
+        from app.core.db import configure_engine
+        configure_engine(url)
         migrate(url)
 
     from app.seed import seed_if_empty
