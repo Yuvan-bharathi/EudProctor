@@ -2,12 +2,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.deps import candidate_only
-from app.models import Course, ExamAssignment, Question, QuestionType, User
+from app.models import Course, Exam, ExamAssignment, ExamQuestion, Question, QuestionType, User
 from app.models.base import utcnow
 from app.models.session import Answer, ExamSession, SessionStatus, SubmitReason
 from app.schemas.sessions import (
@@ -184,27 +184,41 @@ def submit_session(
 
 @router.get("/candidates/me/assessments", response_model=list[MyAssessment])
 def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate_only)):
-    rows = db.execute(
-        select(ExamAssignment, ExamSession)
-        .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
-        .where(ExamAssignment.candidate_id == user.id)
+    """Newest first: latest scheduled start, then most recently assigned. One query (no per-row lookups)."""
+    q_counts = (
+        select(ExamQuestion.exam_id, func.count().label("n")).group_by(ExamQuestion.exam_id).subquery()
     )
-    out = []
-    for a, s in rows:
-        e = a.exam
-        course = db.get(Course, e.course_id) if e else None
-        q_count = len(e.questions) if e and e.questions else 0
-        out.append(
-            MyAssessment(
-                exam_id=e.id,
-                title=e.title,
-                duration_min=e.duration_min,
-                window_start=e.window_start,
-                window_end=e.window_end,
-                session_id=s.id if s else None,
-                session_status=s.status if s else None,
-                course_name=course.name if course else "Full Stack Development",
-                questions_count=q_count,
-            )
+    rows = db.execute(
+        select(
+            Exam.id,
+            Exam.title,
+            Exam.duration_min,
+            Exam.window_start,
+            Exam.window_end,
+            Course.name,
+            ExamSession.id,
+            ExamSession.status,
+            func.coalesce(q_counts.c.n, 0),
         )
-    return sorted(out, key=lambda m: m.window_start)
+        .select_from(ExamAssignment)
+        .join(Exam, Exam.id == ExamAssignment.exam_id)
+        .outerjoin(Course, Course.id == Exam.course_id)
+        .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
+        .outerjoin(q_counts, q_counts.c.exam_id == Exam.id)
+        .where(ExamAssignment.candidate_id == user.id)
+        .order_by(Exam.window_start.desc(), ExamAssignment.created_at.desc())
+    )
+    return [
+        MyAssessment(
+            exam_id=exam_id,
+            title=title,
+            duration_min=duration_min,
+            window_start=window_start,
+            window_end=window_end,
+            session_id=session_id,
+            session_status=session_status,
+            course_name=course_name or "Full Stack Development",
+            questions_count=n,
+        )
+        for exam_id, title, duration_min, window_start, window_end, course_name, session_id, session_status, n in rows
+    ]

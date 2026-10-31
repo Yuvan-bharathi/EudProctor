@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Clock,
   HelpCircle,
-  Loader2,
   ShieldCheck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -15,6 +14,9 @@ import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/States";
+import { authStore } from "@/features/auth/store";
 import { api } from "@/lib/api";
 import { getPersistedAssessments } from "@/lib/mockData";
 import { cn } from "@/lib/utils";
@@ -52,20 +54,60 @@ interface AssessmentItem {
   requirements?: string[];
 }
 
+const isBackendList = (d: unknown): d is MyAssessmentBackend[] =>
+  Array.isArray(d) && d.every((x) => typeof (x as MyAssessmentBackend)?.exam_id === "string");
+
+// Last list from the server, per candidate: painted instantly (newest first) while the fresh list loads
+const cacheKey = (userId: string) => `eduproctor.candidate.assessments.${userId}`;
+
+function readCache(userId: string): MyAssessmentBackend[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(cacheKey(userId)) ?? "null");
+    return isBackendList(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCache(userId: string, list: MyAssessmentBackend[]) {
+  try {
+    localStorage.setItem(cacheKey(userId), JSON.stringify(list));
+  } catch {
+    /* storage unavailable: the next visit just waits for the API */
+  }
+}
+
 export function CandidateAssessmentsPage() {
   usePageTitle("My Assessments");
   const [filter, setFilter] = useState<AssessmentFilter>("all");
+  const auth = authStore.get();
+  const userId = auth?.user?.id ?? "anonymous";
+  // browser-only demo accounts have no server data; real candidates never see the local demo list
+  const isDemoUser = auth?.access_token?.startsWith("mock-") ?? false;
 
-  const { data: remoteAssessments, isLoading } = useQuery<MyAssessmentBackend[]>({
+  const { data, isLoading, isFetching, refetch } = useQuery<MyAssessmentBackend[]>({
     queryKey: ["candidate", "assessments"],
-    queryFn: () => api<MyAssessmentBackend[]>("/candidates/me/assessments"),
+    queryFn: async () => {
+      const list = await api<MyAssessmentBackend[]>("/candidates/me/assessments");
+      if (isBackendList(list)) writeCache(userId, list);
+      return list;
+    },
+    initialData: () => readCache(userId),
+    initialDataUpdatedAt: 0, // always refetch; the cache is only for the first paint
   });
+  // the API client can substitute unrelated demo rows when offline: only real assessment rows count
+  const remoteAssessments = isBackendList(data) ? data : undefined;
+  const loadFailed = !isLoading && !remoteAssessments && !isDemoUser;
 
   const assessments: AssessmentItem[] = useMemo(() => {
     const now = Date.now();
     let rawItems: AssessmentItem[] = [];
 
-    if (remoteAssessments && remoteAssessments.length > 0) {
+    if (isLoading || loadFailed) {
+      return []; // never flash local demo data before (or instead of) the real list
+    }
+
+    if (remoteAssessments) {
       rawItems = remoteAssessments.map((a) => {
         const isCompleted = a.session_status === "submitted" || a.session_status === "scored";
         const startDate = a.window_start
@@ -132,7 +174,7 @@ export function CandidateAssessmentsPage() {
           requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
         };
       });
-    } else {
+    } else if (isDemoUser) {
       const storedAssessments = getPersistedAssessments();
       rawItems = storedAssessments
         .filter((a) => a.status === "scheduled" || a.status === "live" || a.status === "completed")
@@ -185,7 +227,8 @@ export function CandidateAssessmentsPage() {
         });
     }
 
-    // Sort: Newly assigned & active (non-expired) assessments come FIRST
+    // Sort: active (non-expired) assessments first, then the newest scheduled start first.
+    // The sort is stable, so ties keep the server order (most recently assigned first).
     return [...rawItems].sort((a, b) => {
       const aActive = !a.isExpired && a.status === "scheduled";
       const bActive = !b.isExpired && b.status === "scheduled";
@@ -193,10 +236,9 @@ export function CandidateAssessmentsPage() {
       if (aActive && !bActive) return -1;
       if (!aActive && bActive) return 1;
 
-      // Within the same group (active or expired), newest start/created time comes first
       return b.rawTime - a.rawTime;
     });
-  }, [remoteAssessments]);
+  }, [remoteAssessments, isLoading, loadFailed, isDemoUser]);
 
   const filtered = assessments.filter((a) => {
     if (filter === "all") return true;
@@ -236,21 +278,35 @@ export function CandidateAssessmentsPage() {
                 : "text-muted hover:bg-surface-muted hover:text-text"
             }`}
           >
-            {tab.label} ({tab.count})
+            {tab.label}
+            {!isLoading && !loadFailed && ` (${tab.count})`}
           </button>
         ))}
       </div>
 
+      {/* First visit only: later visits paint the cached list immediately while it refreshes */}
       {isLoading && (
-        <div className="flex items-center gap-2 py-6 text-xs text-muted">
-          <Loader2 className="size-4 animate-spin text-primary-600" />
-          <span>Loading scheduled assessments...</span>
+        <div className="space-y-4" role="status" aria-label="Loading your assessments">
+          {[0, 1, 2].map((i) => (
+            <Card key={i} className="space-y-3 p-5 shadow-2xs">
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-5 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </Card>
+          ))}
         </div>
+      )}
+
+      {loadFailed && (
+        <ErrorState
+          message={isFetching ? "Still trying to reach the server…" : "Could not load your assessments."}
+          onRetry={() => void refetch()}
+        />
       )}
 
       {/* Assessments List */}
       <div className="space-y-4">
-        {!isLoading && filtered.length === 0 && (
+        {!isLoading && !loadFailed && filtered.length === 0 && (
           <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center text-xs text-muted shadow-2xs">
             {filter === "expired"
               ? "No expired assessments found."
