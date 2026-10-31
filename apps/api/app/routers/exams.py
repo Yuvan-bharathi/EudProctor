@@ -201,7 +201,7 @@ def patch_exam(
     if exam.window_end <= exam.window_start:
         raise HTTPException(422, "window_end must be after window_start")
     db.commit()
-    return exam
+    return _to_exam_out(db, exam)
 
 
 @router.put("/{exam_id}/questions", response_model=ExamDetailOut)

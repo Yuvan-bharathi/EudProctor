@@ -162,7 +162,9 @@ class AssignmentOut(BaseModel):
     link_sent_at: datetime | None
     link_used_at: datetime | None
     link_expires_at: datetime | None
+    candidate_phone: str | None = None
     accommodations: dict[str, Any]
+    status: str = 'Not started'
 
 
 class ExamDetailOut(ExamOut):

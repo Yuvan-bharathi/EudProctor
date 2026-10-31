@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.deps import candidate_only
-from app.models import ExamAssignment, Question, QuestionType, User
+from app.models import Course, ExamAssignment, Question, QuestionType, User
 from app.models.base import utcnow
 from app.models.session import Answer, ExamSession, SessionStatus, SubmitReason
 from app.schemas.sessions import (
@@ -163,6 +163,8 @@ def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate
     out = []
     for a, s in rows:
         e = a.exam
+        course = db.get(Course, e.course_id) if e else None
+        q_count = len(e.questions) if e and e.questions else 0
         out.append(
             MyAssessment(
                 exam_id=e.id,
@@ -172,6 +174,8 @@ def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate
                 window_end=e.window_end,
                 session_id=s.id if s else None,
                 session_status=s.status if s else None,
+                course_name=course.name if course else "Full Stack Development",
+                questions_count=q_count,
             )
         )
     return sorted(out, key=lambda m: m.window_start)

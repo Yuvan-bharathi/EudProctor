@@ -142,6 +142,39 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [scheduleEndTime, setScheduleEndTime] = useState("11:00");
   const [sendTestLinkEmails, setSendTestLinkEmails] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+
+  const formatExamWindow = (start?: string | null, end?: string | null) => {
+    if (!start || !end) {
+      return assessmentStatus === 'draft' ? 'Not scheduled yet (Draft)' : 'Schedule Pending';
+    }
+    try {
+      const s = new Date(start);
+      const e = new Date(end);
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+        return assessmentStatus === 'draft' ? 'Not scheduled yet (Draft)' : 'Schedule Pending';
+      }
+      const datePart = s.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      const startTimePart = s.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const endTimePart = e.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      return `${datePart}, ${startTimePart} – ${endTimePart}`;
+    } catch {
+      return 'Schedule Pending';
+    }
+  };
 
   useEffect(() => {
     const handleAssessmentUpdate = () => {
@@ -207,7 +240,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       setAssessmentStatus("scheduled");
       setIsPublishing(false);
       setPublishModalOpen(false);
-      showToast(`Assessment published in TiDB Cloud! Dispatched test links to ${sentCount} candidate(s).`);
+      showToast(`Assessment successfully published and scheduled! Secure test links have been sent to ${sentCount} candidate(s).`);
     } catch (err) {
       setIsPublishing(false);
       showToast(errorMessage(err));
@@ -475,11 +508,42 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     }
   };
 
-  const handleDeleteQuestion = (questionId: string) => {
+  const handleDeleteQuestion = async (questionId: string) => {
     const updated = questions.filter((q) => q.id !== questionId);
     setQuestions(updated);
-    saveExamDetailToStorage(examId, { questions: updated });
-    showToast("Question removed from assessment.");
+    try {
+      await api(`/exams/${examId}/questions`, {
+        method: 'PUT',
+        body: { question_ids: updated.map((q) => q.id) },
+      });
+      qc.invalidateQueries({ queryKey: ['exam', examId] });
+      qc.invalidateQueries({ queryKey: ['exams'] });
+      saveExamDetailToStorage(examId, { questions: updated });
+      showToast('Question removed from assessment.');
+    } catch {
+      saveExamDetailToStorage(examId, { questions: updated });
+      showToast('Question removed from assessment.');
+    }
+  };
+
+  const handleDeleteAllQuestions = async () => {
+    setIsDeletingAll(true);
+    try {
+      await api(`/exams/${examId}/questions`, {
+        method: 'PUT',
+        body: { question_ids: [] },
+      });
+      setQuestions([]);
+      saveExamDetailToStorage(examId, { questions: [] });
+      qc.invalidateQueries({ queryKey: ['exam', examId] });
+      qc.invalidateQueries({ queryKey: ['exams'] });
+      setDeleteAllModalOpen(false);
+      showToast('All questions successfully deleted from this assessment.');
+    } catch (err) {
+      showToast(errorMessage(err));
+    } finally {
+      setIsDeletingAll(false);
+    }
   };
 
   // Questions Actions: AI Agent Recommendations
@@ -865,7 +929,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <div className="flex justify-between border-b border-border pb-2">
                   <span className="text-muted">Examination Window</span>
                   <span className="font-semibold text-text">
-                    {assessmentCard?.scheduledDate || (assessmentStatus === "draft" ? "Not scheduled yet (Draft)" : "Jan 15, 10:00 AM – Jan 15, 11:00 AM")}
+                    {formatExamWindow(exam?.window_start, exam?.window_end)}
                   </span>
                 </div>
                 <div className="flex justify-between border-b border-border pb-2">
@@ -967,6 +1031,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   >
                     <Plus className="size-4" />
                     <span>Add Question</span>
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setDeleteAllModalOpen(true)}
+                    className="gap-1.5 text-xs font-semibold text-danger-700 shadow-2xs hover:bg-danger-50 hover:text-danger-800 cursor-pointer"
+                  >
+                    <Trash2 className="size-3.5 text-danger-600" />
+                    <span>Delete All Questions</span>
                   </Button>
                 </>
               )}
@@ -2620,6 +2694,58 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           </div>
         </div>
       )}
+
+      {/* CONFIRM DELETE ALL QUESTIONS MODAL */}
+      {deleteAllModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-danger-50 text-danger-600">
+                <Trash2 className="size-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-text">Delete All Questions</h3>
+                <p className="text-xs text-muted">This action will remove all {questions.length} questions from this assessment.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted leading-relaxed">
+              Are you sure you want to remove all configured questions from <strong>"{exam?.title || 'this assessment'}"</strong>? 
+              This will update the assessment immediately. You can re-import questions anytime from Excel or CSV.
+            </p>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-border">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setDeleteAllModalOpen(false)}
+                disabled={isDeletingAll}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleDeleteAllQuestions}
+                disabled={isDeletingAll}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer"
+              >
+                {isDeletingAll ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="size-3.5" />
+                    <span>Yes, Delete All ({questions.length})</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
