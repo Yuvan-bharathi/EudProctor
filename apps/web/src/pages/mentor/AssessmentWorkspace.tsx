@@ -289,6 +289,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   // Modals for Questions:
   // 1. Add Custom Question Modal
+  const [isSavingQuestion, setIsSavingQuestion] = useState(false);
+  const [isAddingCandidate, setIsAddingCandidate] = useState(false);
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const [isImportingCandidates, setIsImportingCandidates] = useState(false);
   const [customQuestionModalOpen, setCustomQuestionModalOpen] = useState(false);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [customBody, setCustomBody] = useState("");
@@ -409,19 +413,24 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       session_id: `s-${Date.now()}`,
     };
 
-    const updatedAssignments = [newCandidate, ...assignments];
-    setAssignments(updatedAssignments);
-    saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+    setIsAddingCandidate(true);
+    try {
+      const updatedAssignments = [newCandidate, ...assignments];
+      setAssignments(updatedAssignments);
+      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
 
-    // Reset Form
-    setCandFullName("");
-    setCandEmail("");
-    setCandPhone("");
-    setCandRollNumber("");
-    setCandFormError(null);
-    setAddStudentModalOpen(false);
+      // Reset Form
+      setCandFullName("");
+      setCandEmail("");
+      setCandPhone("");
+      setCandRollNumber("");
+      setCandFormError(null);
+      setAddStudentModalOpen(false);
 
-    showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
+      showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
+    } finally {
+      setIsAddingCandidate(false);
+    }
   };
 
   // Candidate Actions: Remove (CRUD)
@@ -467,8 +476,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   const handleSaveCustomQuestion = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSavingQuestion) return;
     if (!customBody.trim() || !customOptionA.trim() || !customOptionB.trim()) return;
 
+    setIsSavingQuestion(true);
     try {
       const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
         body: {
@@ -495,9 +506,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ["exam", examId] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setCustomQuestionModalOpen(false);
-      showToast("Question saved directly to TiDB Cloud.");
+      showToast(editingQuestionId ? "Question updated successfully." : "Question saved successfully.");
     } catch (err) {
       showToast(errorMessage(err));
+    } finally {
+      setIsSavingQuestion(false);
     }
   };
 
@@ -593,7 +606,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   };
 
   const handleImportParsedExcelQuestions = async () => {
-    if (parsedExcelRows.length === 0) return;
+    if (isImportingExcel || parsedExcelRows.length === 0) return;
+    setIsImportingExcel(true);
     try {
       const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
         body: {
@@ -617,9 +631,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ["exam", examId] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setExcelModalOpen(false);
-      showToast(`Successfully saved ${parsedExcelRows.length} question(s) directly to TiDB Cloud.`);
+      showToast(`Successfully imported ${parsedExcelRows.length} question(s) to assessment.`);
     } catch (err) {
       showToast(errorMessage(err));
+    } finally {
+      setIsImportingExcel(false);
     }
   };
 
@@ -641,7 +657,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   };
 
   const handleImportParsedCandidates = () => {
-    if (parsedCandidateRows.length === 0) return;
+    if (isImportingCandidates || parsedCandidateRows.length === 0) return;
+    setIsImportingCandidates(true);
+    try {
 
     const newAssignments: Assignment[] = parsedCandidateRows.map((row, idx) => ({
       id: `a-xl-${Date.now()}-${idx}`,
@@ -666,6 +684,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     setCandidateExcelModalOpen(false);
     setParsedCandidateRows([]);
     showToast(`Successfully enrolled ${newAssignments.length} candidate(s) from Excel.`);
+    } finally {
+      setIsImportingCandidates(false);
+    }
   };
 
   // Settings Save
@@ -1041,7 +1062,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           </div>
 
           {/* Questions List */}
-          {questions.length === 0 ? (
+          {examQuery.isLoading ? (
+            <div className="flex flex-col items-center justify-center p-12 text-center text-xs text-muted gap-3 rounded-xl border border-border bg-surface">
+              <Loader2 className="size-6 animate-spin text-primary-600" />
+              <span>Loading assessment questions...</span>
+            </div>
+          ) : questions.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center shadow-2xs space-y-6">
               <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary-50 text-primary-600">
                 <HelpCircle className="size-7" />
@@ -1342,7 +1368,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
               {/* Enrolled Candidates Table with Mobile Number */}
               <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-2xs">
-                {filteredAssignments.length === 0 ? (
+                {examQuery.isLoading ? (
+                  <div className="flex flex-col items-center justify-center p-12 text-center text-xs text-muted gap-3">
+                    <Loader2 className="size-6 animate-spin text-primary-600" />
+                    <span>Loading candidate roster...</span>
+                  </div>
+                ) : filteredAssignments.length === 0 ? (
                   <div className="p-8 text-center">
                     <EmptyState
                       message="No candidates match your search."
@@ -1880,8 +1911,19 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button type="button" variant="secondary" onClick={() => setCustomQuestionModalOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" className="bg-primary-600 font-semibold text-white hover:bg-primary-700">
-                  {editingQuestionId ? "Update Question" : "Save Question"}
+                <Button
+                  type="submit"
+                  disabled={isSavingQuestion}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  {isSavingQuestion ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>{editingQuestionId ? "Updating..." : "Saving..."}</span>
+                    </>
+                  ) : (
+                    <span>{editingQuestionId ? "Update Question" : "Save Question"}</span>
+                  )}
                 </Button>
               </div>
             </form>
@@ -2167,10 +2209,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   type="button"
                   onClick={handleImportParsedExcelQuestions}
-                  disabled={parsedExcelRows.length === 0}
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isImportingExcel || parsedExcelRows.length === 0}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Import Questions
+                  {isImportingExcel ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Importing Questions...</span>
+                    </>
+                  ) : (
+                    <span>Import Questions ({parsedExcelRows.length})</span>
+                  )}
                 </Button>
               </div>
             </div>
@@ -2334,9 +2383,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 </Button>
                 <Button
                   type="submit"
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isAddingCandidate}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Enroll Candidate
+                  {isAddingCandidate ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Enrolling...</span>
+                    </>
+                  ) : (
+                    <span>Enroll Candidate</span>
+                  )}
                 </Button>
               </div>
             </form>
@@ -2464,10 +2521,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   type="button"
                   onClick={handleImportParsedCandidates}
-                  disabled={parsedCandidateRows.length === 0}
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isImportingCandidates || parsedCandidateRows.length === 0}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Enroll Candidates
+                  {isImportingCandidates ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Enrolling Candidates...</span>
+                    </>
+                  ) : (
+                    <span>Enroll Candidates ({parsedCandidateRows.length})</span>
+                  )}
                 </Button>
               </div>
             </div>

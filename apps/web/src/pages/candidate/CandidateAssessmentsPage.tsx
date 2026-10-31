@@ -163,6 +163,11 @@ export function CandidateAssessmentsPage() {
 
       {/* Assessments List */}
       <div className="space-y-4">
+        {!isLoading && filtered.length === 0 && (
+          <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center text-xs text-muted shadow-2xs">
+            No scheduled assessments found for your profile.
+          </div>
+        )}
         {filtered.map((item) => {
           if (item.status === "scheduled") {
             return (

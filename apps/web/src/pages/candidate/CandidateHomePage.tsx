@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Clock,
   HelpCircle,
+  Loader2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -33,7 +34,7 @@ export function CandidateHomePage() {
   const { user } = useAuth();
   const data = mockCandidateDashboard;
 
-  const { data: remoteAssessments } = useQuery<MyAssessmentBackend[]>({
+  const { data: remoteAssessments, isLoading } = useQuery<MyAssessmentBackend[]>({
     queryKey: ["candidate", "assessments"],
     queryFn: () => api<MyAssessmentBackend[]>("/candidates/me/assessments"),
   });
@@ -123,34 +124,41 @@ export function CandidateHomePage() {
       <div className="grid gap-6 md:grid-cols-2">
         {/* Card 1: Your next assessment */}
         <div className="flex flex-col justify-between rounded-xl border border-border bg-surface p-6 shadow-2xs">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Your next assessment</span>
-              <span className="rounded-full bg-info-50 px-2.5 py-0.5 text-xs font-medium text-info-700">
-                Scheduled
-              </span>
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center p-8 text-center text-xs text-muted gap-2">
+              <Loader2 className="size-5 animate-spin text-primary-600" />
+              <span>Checking your scheduled assessments...</span>
             </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted">Your next assessment</span>
+                <span className="rounded-full bg-info-50 px-2.5 py-0.5 text-xs font-medium text-info-700">
+                  Scheduled
+                </span>
+              </div>
 
-            <div>
-              <h3 className="text-base font-bold text-text">{nextTitle}</h3>
-              <p className="text-xs text-muted">{nextCourse}</p>
-            </div>
+              <div>
+                <h3 className="text-base font-bold text-text">{nextTitle}</h3>
+                <p className="text-xs text-muted">{nextCourse}</p>
+              </div>
 
-            <div className="flex flex-wrap items-center gap-4 text-xs text-muted">
-              <span className="flex items-center gap-1.5">
-                <Calendar className="size-3.5" />
-                {nextScheduled}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Clock className="size-3.5" />
-                {nextDuration}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <HelpCircle className="size-3.5" />
-                {nextQuestions}
-              </span>
+              <div className="flex flex-wrap items-center gap-4 text-xs text-muted">
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="size-3.5" />
+                  {nextScheduled}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <Clock className="size-3.5" />
+                  {nextDuration}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <HelpCircle className="size-3.5" />
+                  {nextQuestions}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="mt-6 border-t border-border pt-4">
             <Button asChild className="w-full bg-primary-600 text-white hover:bg-primary-700">

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart2,
+  CheckCircle2,
+  Loader2,
   Calendar,
   Clock,
   Eye,
@@ -63,6 +65,12 @@ export function ExamsPage() {
   const [threshold, setThreshold] = useState(3);
   const [shuffle, setShuffle] = useState(true);
 
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
   const examsQuery = useQuery({
     queryKey: ["exams"],
     queryFn: () => api<Exam[]>("/exams"),
@@ -95,6 +103,7 @@ export function ExamsPage() {
     },
     onSuccess: (exam) => {
       qc.invalidateQueries({ queryKey: ["exams"] });
+      showToast("Assessment created successfully!");
       setModalOpen(false);
       navigate(`${baseExamPath}/${exam.id}`);
     },
@@ -142,6 +151,22 @@ export function ExamsPage() {
 
   return (
     <div className="space-y-6">
+      {toastMessage && (
+        <div className="flex items-center justify-between rounded-xl border border-success-200 bg-success-50/90 px-4 py-3 text-xs font-semibold text-success-800 shadow-2xs backdrop-blur-2xs transition-all animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="size-4 shrink-0 text-success-600" />
+            <span>{toastMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="rounded-lg p-1 text-success-700 hover:bg-success-100 cursor-pointer"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Header: Title & "+ Create assessment" button */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
@@ -190,7 +215,12 @@ export function ExamsPage() {
 
       {/* Cards List Layout matching Screen 2 */}
       <div className="space-y-3">
-        {filteredAssessments.length === 0 ? (
+        {examsQuery.isLoading ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface p-12 text-center text-xs text-muted gap-3 shadow-xs">
+            <Loader2 className="size-6 animate-spin text-primary-600" />
+            <span className="font-medium">Loading assessments...</span>
+          </div>
+        ) : filteredAssessments.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted">
             No assessments found in this status.
           </div>
@@ -435,8 +465,19 @@ export function ExamsPage() {
                 <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={!title.trim() || create.isPending}>
-                  {create.isPending ? "Creating..." : "Create assessment"}
+                <Button
+                  type="submit"
+                  disabled={!title.trim() || create.isPending}
+                  className="bg-primary-600 hover:bg-primary-700 text-white gap-1.5 font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  {create.isPending ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Creating Assessment...</span>
+                    </>
+                  ) : (
+                    <span>Create assessment</span>
+                  )}
                 </Button>
               </div>
             </form>
