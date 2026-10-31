@@ -215,14 +215,15 @@ export function AppShell({
             </div>
 
             {/* Notification Bell */}
-            <button
-              type="button"
-              className="relative rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted hover:text-text"
-              aria-label="Notifications"
+            <Link
+              to={`/${user?.role || "mentor"}/notifications`}
+              className="relative rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted hover:text-text cursor-pointer"
+              aria-label="Notification Center"
+              title="Notification Center"
             >
               <Bell className="size-4.5" />
-              <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-danger-500" />
-            </button>
+              <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-danger-500 ring-2 ring-surface animate-pulse" />
+            </Link>
 
             {/* Avatar Pill */}
             <div className="flex size-8 items-center justify-center rounded-full bg-primary-100 text-xs font-semibold text-primary-700">

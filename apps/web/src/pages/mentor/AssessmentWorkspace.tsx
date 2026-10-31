@@ -148,6 +148,45 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [isDeletingQuestion, setIsDeletingQuestion] = useState(false);
   const [isRemovingCandidate, setIsRemovingCandidate] = useState(false);
 
+  const calculateEndTime = (startHhMm: string, durMin: number): string => {
+    if (!startHhMm || !startHhMm.includes(":")) return startHhMm;
+    const [h, m] = startHhMm.split(":").map(Number);
+    const totalMinutes = h * 60 + m + durMin;
+    const endH = Math.floor((totalMinutes / 60) % 24);
+    const endM = totalMinutes % 60;
+    return `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
+  };
+
+  const scheduleTimingStatus = useMemo(() => {
+    if (assessmentStatus !== "draft" || !exam?.window_start) {
+      return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+    }
+    try {
+      const startTime = new Date(exam.window_start).getTime();
+      if (isNaN(startTime)) return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+      const now = Date.now();
+      if (now >= startTime) {
+        return {
+          isAlert: true,
+          isPassed: true,
+          isNearing: false,
+          label: "Schedule passed",
+          message: "The scheduled examination window for this draft assessment has already passed. Please reschedule the start time or publish immediately.",
+        };
+      }
+      if (startTime - now <= 30 * 60 * 1000) {
+        return {
+          isAlert: true,
+          isPassed: false,
+          isNearing: true,
+          label: "Starting soon (within 30 mins)",
+          message: "The scheduled examination window begins in less than 30 minutes, but this assessment is still in Draft status. Publish now to dispatch candidate links or reschedule.",
+        };
+      }
+    } catch {}
+    return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+  }, [assessmentStatus, exam?.window_start]);
+
   const formatExamWindow = (start?: string | null, end?: string | null) => {
     if (!start || !end) {
       return assessmentStatus === 'draft' ? 'Not scheduled yet (Draft)' : 'Schedule Pending';
@@ -948,11 +987,18 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   <span className="text-muted">Target Course</span>
                   <span className="font-semibold text-text">{settingsCourse}</span>
                 </div>
-                <div className="flex justify-between border-b border-border pb-2">
+                <div className="flex justify-between items-center border-b border-border pb-2">
                   <span className="text-muted">Examination Window</span>
-                  <span className="font-semibold text-text">
-                    {formatExamWindow(exam?.window_start, exam?.window_end)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-text">
+                      {formatExamWindow(exam?.window_start, exam?.window_end)}
+                    </span>
+                    {scheduleTimingStatus.isAlert && (
+                      <span className="rounded-md bg-danger-100 px-2 py-0.5 text-[10px] font-bold text-danger-700">
+                        ⚠️ {scheduleTimingStatus.label}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between border-b border-border pb-2">
                   <span className="text-muted">Allocated Duration</span>
@@ -2692,7 +2738,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       id="sched-start"
                       type="time"
                       value={scheduleStartTime}
-                      onChange={(e) => setScheduleStartTime(e.target.value)}
+                      onChange={(e) => {
+                        const newStart = e.target.value;
+                        setScheduleStartTime(newStart);
+                        setScheduleEndTime(calculateEndTime(newStart, durationMinutes));
+                      }}
                       required
                       className="mt-1"
                     />

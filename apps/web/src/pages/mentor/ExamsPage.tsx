@@ -61,7 +61,29 @@ export function ExamsPage() {
   const [title, setTitle] = useState("");
   const [duration, setDuration] = useState(60);
   const [start, setStart] = useState(localInput(now));
-  const [end, setEnd] = useState(localInput(new Date(now.getTime() + 7 * 864e5)));
+  const [end, setEnd] = useState(localInput(new Date(now.getTime() + 60 * 60 * 1000)));
+
+  function handleStartChange(newStart: string) {
+    setStart(newStart);
+    try {
+      const s = new Date(newStart);
+      if (!isNaN(s.getTime())) {
+        const calculatedEnd = new Date(s.getTime() + duration * 60 * 1000);
+        setEnd(localInput(calculatedEnd));
+      }
+    } catch {}
+  }
+
+  function handleDurationChange(newDur: number) {
+    setDuration(newDur);
+    try {
+      const s = new Date(start);
+      if (!isNaN(s.getTime())) {
+        const calculatedEnd = new Date(s.getTime() + newDur * 60 * 1000);
+        setEnd(localInput(calculatedEnd));
+      }
+    } catch {}
+  }
   const [threshold, setThreshold] = useState(3);
   const [shuffle, setShuffle] = useState(true);
 
@@ -141,6 +163,8 @@ export function ExamsPage() {
       createdBy,
       createdDate,
       targetRole: courseName,
+      window_start: e.window_start,
+      window_end: e.window_end,
     };
   });
 
@@ -408,7 +432,7 @@ export function ExamsPage() {
                     type="number"
                     min={1}
                     value={duration}
-                    onChange={(e) => setDuration(+e.target.value)}
+                    onChange={(e) => handleDurationChange(+e.target.value)}
                   />
                 </div>
                 <div>
@@ -428,7 +452,7 @@ export function ExamsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="modal-start">Window Opens</Label>
-                  <Input id="modal-start" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
+                  <Input id="modal-start" type="datetime-local" value={start} onChange={(e) => handleStartChange(e.target.value)} />
                 </div>
                 <div>
                   <Label htmlFor="modal-end">Window Closes</Label>

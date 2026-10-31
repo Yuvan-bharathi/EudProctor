@@ -14,6 +14,7 @@ import { CandidateResultsViewPage } from "@/pages/candidate/CandidateResultsView
 import { JoinPage } from "@/pages/candidate/JoinPage";
 import { SessionPage } from "@/pages/candidate/SessionPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { NotificationsPage } from "@/pages/NotificationsPage";
 import { CandidateResultPage } from "@/pages/mentor/CandidateResultPage";
 import { ExamDetailPage } from "@/pages/mentor/ExamDetailPage";
 import { ExamResultsPage } from "@/pages/mentor/ExamResultsPage";
@@ -71,6 +72,7 @@ export function App() {
         <Route path="agent" element={<Navigate to="/admin" replace />} />
         <Route path="agent/runs/:runId" element={<Navigate to="/admin" replace />} />
         <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
 
         {/* Admin Internship Routes */}
         <Route path="internship" element={<AdminInternshipDashboardPage />} />
@@ -168,6 +170,7 @@ export function App() {
         <Route path="results" element={<CandidateResultsViewPage />} />
         <Route path="practice" element={<Navigate to="/candidate/assessments" replace />} />
         <Route path="practice/:practiceId" element={<Navigate to="/candidate/assessments" replace />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="profile" element={<CandidateProfilePage />} />
 
         {/* Mentee Internship Routes */}
