@@ -599,55 +599,53 @@ function CandidateProctoringCard({
 }) {
   const panelId = `proctoring-${card.key}`;
   const awayNow = live?.away && Date.now() - live.away.at < 2500;
+  // the overview shows two numbers: red flags and the most frequent integrity alert; the rest is in Details
+  const [topType, topCount] = Object.entries(card.alertsByType).reduce<[string | null, number]>(
+    (best, [type, n]) => (n > best[1] ? [type, n] : best),
+    [null, 0],
+  );
+  const extraAlerts = Object.values(card.alertsByType).reduce((a, n) => a + n, 0) - topCount;
   return (
     <li className="rounded-xl border border-border bg-surface">
-      <div className="flex flex-wrap items-center gap-4 p-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 p-4 lg:flex-nowrap">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary-50 text-sm font-semibold text-primary-700" aria-hidden="true">
           {initials(card.name)}
         </span>
-        <div className="min-w-48 flex-1">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-text">{card.name}</span>
+            <span className="truncate font-semibold text-text">{card.name}</span>
             <Badge tone={statusBadge[card.status]}>
               {card.status === "live" && <Radio aria-hidden="true" />}
               {card.statusLabel}
             </Badge>
             {awayNow && <Badge tone="warning">Looking away now</Badge>}
+            {card.identityReviews > 0 && <Badge tone="warning"><AlertTriangle aria-hidden="true" /> Identity review</Badge>}
           </div>
-          {card.email && <div className="text-xs text-muted">{card.email}</div>}
+          {card.email && <div className="truncate text-xs text-muted">{card.email}</div>}
         </div>
-        <dl className="flex flex-wrap gap-2 text-xs">
-          <div title={METRIC_HELP.redFlags} className={cn("cursor-help rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}>
+        <dl className="flex shrink-0 flex-wrap gap-2 text-xs">
+          <div
+            title={card.limitReached ? `${METRIC_HELP.redFlags}\n\n${METRIC_HELP.afterLimit}` : METRIC_HELP.redFlags}
+            className={cn("cursor-help whitespace-nowrap rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}
+          >
             <dt className="inline">Red flags </dt>
-            <dd className="inline font-semibold">{card.flags} / {card.maxFlags}</dd>
+            <dd className="inline font-semibold">
+              {card.flags} / {card.maxFlags}
+              {card.afterLimit > 0 && <span className="font-normal"> · +{card.afterLimit} after limit</span>}
+            </dd>
           </div>
-          <div title={METRIC_HELP.headGlances} className="cursor-help rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
-            <dt className="inline">Head glances </dt>
-            <dd className="inline font-semibold">{card.headGlances}</dd>
+          <div
+            title={topType ? `${ALERT_HELP[topType] ?? eventLabel(topType)}${extraAlerts > 0 ? `\n\n+${extraAlerts} other alert(s): open Details for the breakdown.` : ""}` : "No integrity alerts recorded."}
+            className={cn("cursor-help whitespace-nowrap rounded-lg px-2.5 py-1", topType ? "bg-warning-50 text-warning-800" : "bg-surface-muted text-text")}
+          >
+            <dt className="inline">{topType ? `${eventLabel(topType)} ` : "Alerts "}</dt>
+            <dd className="inline font-semibold">
+              {topCount}
+              {extraAlerts > 0 && <span className="font-normal"> · +{extraAlerts} more</span>}
+            </dd>
           </div>
-          <div title={METRIC_HELP.eyeGlances} className="cursor-help rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
-            <dt className="inline">Eye glances </dt>
-            <dd className="inline font-semibold">{card.eyeGlances}</dd>
-          </div>
-          {/* one chip per integrity alert type, instead of a vague "other" total */}
-          {Object.entries(card.alertsByType)
-            .filter(([, n]) => n > 0)
-            .map(([type, n]) => (
-              <div key={type} title={ALERT_HELP[type] ?? eventLabel(type)} className="cursor-help rounded-lg bg-warning-50 px-2.5 py-1 text-warning-800">
-                <dt className="inline">{eventLabel(type)} </dt>
-                <dd className="inline font-semibold">{n}</dd>
-              </div>
-            ))}
-          {card.limitReached && (
-            <div title={METRIC_HELP.afterLimit} className="cursor-help rounded-lg bg-danger-50 px-2.5 py-1 text-danger-700">
-              {/* incidents keep being recorded after the candidate's 3 notified flags */}
-              <dt className="inline">Flag limit reached · after limit </dt>
-              <dd className="inline font-semibold">{card.afterLimit}</dd>
-            </div>
-          )}
-          {card.identityReviews > 0 && <Badge tone="warning"><AlertTriangle aria-hidden="true" /> Identity review</Badge>}
         </dl>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {card.status === "live" && (
             <Button size="sm" variant="secondary" onClick={onLiveCam}>
               <Camera aria-hidden="true" /> Live Cam
