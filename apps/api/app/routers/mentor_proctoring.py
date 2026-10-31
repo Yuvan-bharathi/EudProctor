@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -68,9 +68,10 @@ class ReviewIn(BaseModel):
     comment: str = Field(default="", max_length=500)
 
 
-def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
-    out: dict[uuid.UUID, dict[str, int]] = {
-        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0, "post_limit": 0} for sid in session_ids
+def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
+    """Per session: glances by source, integrity alerts (total, high, and by type), flags after the limit."""
+    out: dict[uuid.UUID, dict[str, Any]] = {
+        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0, "post_limit": 0, "by_type": {}} for sid in session_ids
     }
     if not session_ids:
         return out
@@ -80,12 +81,13 @@ def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[s
         .group_by(GlanceLog.session_id, GlanceLog.source)
     ):
         out[sid][src] = n
-    for sid, sev, n in db.execute(
-        select(ProctorEvent.session_id, ProctorEvent.severity, func.count())
+    for sid, ev_type, sev, n in db.execute(
+        select(ProctorEvent.session_id, ProctorEvent.type, ProctorEvent.severity, func.count())
         .where(ProctorEvent.session_id.in_(session_ids), ProctorEvent.type.not_in(LOOK_AWAY_TYPES))
-        .group_by(ProctorEvent.session_id, ProctorEvent.severity)
+        .group_by(ProctorEvent.session_id, ProctorEvent.type, ProctorEvent.severity)
     ):
         out[sid]["alerts"] += n
+        out[sid]["by_type"][ev_type] = out[sid]["by_type"].get(ev_type, 0) + n
         if sev == "high":
             out[sid]["high"] += n
     for sid, n in db.execute(  # flagged incidents after the candidate reached max flags
@@ -249,16 +251,17 @@ class LiveRow(BaseModel):
     flag_limit_reached: bool
     head_glances: int
     eye_glances: int
-    other_alerts: int
+    other_alerts: int  # total integrity alerts; the breakdown is in alerts_by_type
     high_alerts: int
     open_identity_reviews: int
+    alerts_by_type: dict[str, int] = {}  # e.g. TAB_SWITCH, FACE_ABSENT, MULTIPLE_FACES, COPY_PASTE_ATTEMPT
     post_limit: int = 0
     started_at: datetime | None = None
     looking_away: dict | None = None  # ongoing look-away right now (source, direction, duration_ms)
     recent_alerts: list[dict] = []  # latest alerts, newest first
 
 
-def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, int], reviews: int) -> LiveRow:
+def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, Any], reviews: int) -> LiveRow:
     ongoing, recent = live.snapshot(str(s.id))
     return LiveRow(
         session_id=s.id,
@@ -274,6 +277,7 @@ def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, int], reviews: i
         high_alerts=c["high"],
         open_identity_reviews=reviews,
         post_limit=c["post_limit"],
+        alerts_by_type=c["by_type"],
         started_at=s.started_at,
         looking_away=ongoing if s.status.value == "in_progress" else None,
         recent_alerts=recent,

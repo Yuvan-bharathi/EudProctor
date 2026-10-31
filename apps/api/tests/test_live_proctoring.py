@@ -140,3 +140,4 @@ def test_course_mentor_sees_details_and_post_limit_count(client, db, mentor, cou
     assert details.status_code == 200 and details.json()["summary"]["post_limit"] == 2
     row = client.get(f"/api/v1/mentor/exams/{exam.id}/live", headers=auth(co_mentor)).json()[0]
     assert row["flag_count"] == 3 and row["post_limit"] == 2 and row["flag_limit_reached"] is True
+    assert row["alerts_by_type"] == {"TAB_SWITCH": 5} and row["other_alerts"] == 5

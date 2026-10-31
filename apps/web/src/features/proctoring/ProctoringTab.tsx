@@ -52,6 +52,7 @@ interface LiveRow {
   other_alerts: number;
   high_alerts: number;
   open_identity_reviews: number;
+  alerts_by_type?: Record<string, number>;
   post_limit?: number;
   started_at?: string | null;
   looking_away?: { source?: LookSource; direction?: string; duration_ms?: number } | null;
@@ -108,6 +109,7 @@ interface CandidateCard {
   headGlances: number;
   eyeGlances: number;
   otherAlerts: number;
+  alertsByType: Record<string, number>;
   highAlerts: number;
   identityReviews: number;
   sample?: LiveCandidateRow;
@@ -123,14 +125,14 @@ function fromLive(r: LiveRow, emails: Map<string, string>): CandidateCard {
   return {
     key: r.session_id, sessionId: r.session_id, name: r.candidate_name, email: emails.get(r.candidate_id) ?? "", status, statusLabel: label,
     flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, afterLimit: r.post_limit ?? 0, headGlances: r.head_glances, eyeGlances: r.eye_glances,
-    otherAlerts: r.other_alerts, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
+    otherAlerts: r.other_alerts, alertsByType: r.alerts_by_type ?? {}, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
   };
 }
 
 function fromAssignment(a: Assignment): CandidateCard {
   return {
     key: `assignment-${a.id}`, sessionId: null, name: a.candidate_name, email: a.candidate_email, status: "not_started",
-    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, afterLimit: 0, headGlances: 0, eyeGlances: 0, otherAlerts: 0,
+    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, afterLimit: 0, headGlances: 0, eyeGlances: 0, otherAlerts: 0, alertsByType: {},
     highAlerts: 0, identityReviews: 0,
   };
 }
@@ -140,7 +142,7 @@ function fromSample(r: LiveCandidateRow): CandidateCard {
   return {
     key: r.id, sessionId: null, name: r.name, email: r.email, status, statusLabel: r.status === "In progress" ? "Taking the assessment" : r.status,
     flags: r.flags, maxFlags: r.maxFlags, limitReached: false, afterLimit: 0, headGlances: r.flags + 2, eyeGlances: r.isGlancing ? 4 : 1,
-    otherAlerts: r.status === "Not started" ? 0 : 1, highAlerts: 0, identityReviews: 0, sample: r,
+    otherAlerts: r.status === "Not started" ? 0 : 1, alertsByType: r.status === "Not started" ? {} : { TAB_SWITCH: 1 }, highAlerts: 0, identityReviews: 0, sample: r,
   };
 }
 
@@ -270,28 +272,98 @@ function EventCell({ item }: { item: TimelineItem }) {
   );
 }
 
-/** Per-candidate report: what was recorded, by type, above the full timeline. */
+// ---------- metric definitions (tooltips + legend). Thresholds are the platform defaults from server config ----------
+const METRIC_HELP = {
+  redFlags:
+    "Red flags shown to the candidate (max 3): looking away for 3 s or more, or leaving the assessment tab for more than 2 s. The candidate sees a calm notice; nothing is paused or submitted.",
+  afterLimit:
+    "Incidents that would have been a red flag but happened after the candidate already had 3. Recorded for you; the candidate is not notified again.",
+  headGlances: "Head turned away from the screen for 1 to under 3 s. Mentor-only; the candidate is never told.",
+  eyeGlances: "Eyes moved off the screen (head still facing it) for 1 to under 3 s. Mentor-only.",
+  longLookAways: "Look-aways of 3 s or more (head or eyes), whether they became a red flag or came after the limit.",
+  longest: "The single longest look-away in this attempt.",
+} as const;
+
+const ALERT_HELP: Record<string, string> = {
+  TAB_SWITCH:
+    "Left the assessment tab or window for more than 2 s (switched tab, another app, or devtools). Each one is also a red flag (or after limit).",
+  FACE_ABSENT: "No face in the camera for 3 s or more. Medium; High if it lasts over 30 s.",
+  MULTIPLE_FACES: "More than one face in the camera for 2 s or more. High; a snapshot is kept as evidence.",
+  COPY_PASTE_ATTEMPT: "Tried to copy, cut or paste. It was blocked and logged.",
+  FULLSCREEN_EXIT: "Left full-screen mode.",
+  CAMERA_UNAVAILABLE: "The camera stopped or permission was lost. The assessment continues.",
+  IDENTITY_MISMATCH: "A random identity check did not match the enrolled face.",
+  LIVENESS_FAIL: "The liveness check (blink / head turn) was not passed.",
+};
+
+/** Exact local date and time of an event, e.g. "31 Oct 2026, 6:14:03 pm". */
+function formatStamp(iso: string) {
+  return new Date(iso).toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function Metric({ label, value, help, className }: { label: string; value: string | number; help: string; className?: string }) {
+  return (
+    <span title={help} className={cn("cursor-help rounded-lg bg-surface-muted px-2.5 py-1 text-text", className)}>
+      {label} <strong>{value}</strong>
+    </span>
+  );
+}
+
+/** Per-candidate report: what was recorded, by meaning, above the full timeline. */
 function ReportSummary({ items }: { items: TimelineItem[] }) {
-  const byType = new Map<string, number>();
-  for (const i of items) {
-    const label = i.kind === "glance" ? `${i.source === "eyes" ? "Eye" : "Head"} glances` : eventLabel(i.type);
-    byType.set(label, (byType.get(label) ?? 0) + 1);
-  }
-  const longest = Math.max(0, ...items.filter((i) => i.kind === "glance" || i.type.startsWith("LOOK_AWAY")).map((i) => i.duration_ms));
+  const count = (pred: (i: TimelineItem) => boolean) => items.filter(pred).length;
+  const lookAways = items.filter((i) => i.kind === "glance" || i.type.startsWith("LOOK_AWAY"));
+  const longest = Math.max(0, ...lookAways.map((i) => i.duration_ms));
+  const alerts = new Map<string, number>();
+  for (const i of items) if (i.item_type === "event" && !i.type.startsWith("LOOK_AWAY")) alerts.set(i.type, (alerts.get(i.type) ?? 0) + 1);
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <span className="font-semibold text-text">Report:</span>
-      {[...byType.entries()].map(([label, n]) => (
-        <span key={label} className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
-          {label} <strong>{n}</strong>
-        </span>
+      <Metric label="Red flags (notified)" value={count((i) => i.kind === "red_flag")} help={METRIC_HELP.redFlags} className="bg-danger-50 text-danger-700" />
+      <Metric label="After limit" value={count((i) => i.kind === "post_limit")} help={METRIC_HELP.afterLimit} />
+      <Metric label="Look-aways ≥ 3 s" value={count((i) => i.type.startsWith("LOOK_AWAY"))} help={METRIC_HELP.longLookAways} />
+      <Metric label="Head glances" value={count((i) => i.kind === "glance" && i.source !== "eyes")} help={METRIC_HELP.headGlances} className="bg-info-50 text-info-700" />
+      <Metric label="Eye glances" value={count((i) => i.kind === "glance" && i.source === "eyes")} help={METRIC_HELP.eyeGlances} className="bg-info-50 text-info-700" />
+      {[...alerts.entries()].map(([type, n]) => (
+        <Metric key={type} label={eventLabel(type)} value={n} help={ALERT_HELP[type] ?? eventLabel(type)} className="bg-warning-50 text-warning-800" />
       ))}
-      {longest > 0 && (
-        <span className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
-          Longest look-away <strong>{formatDuration(longest)}</strong>
-        </span>
-      )}
+      {longest > 0 && <Metric label="Longest look-away" value={formatDuration(longest)} help={METRIC_HELP.longest} />}
     </div>
+  );
+}
+
+/** Plain-language definitions of every number on this tab. */
+function MetricsLegend() {
+  const rows: [string, string][] = [
+    ["Red flags", METRIC_HELP.redFlags],
+    ["After limit", METRIC_HELP.afterLimit],
+    ["Head glances", METRIC_HELP.headGlances],
+    ["Eye glances", METRIC_HELP.eyeGlances],
+    ...Object.entries(ALERT_HELP).map(([type, help]) => [eventLabel(type), help] as [string, string]),
+  ];
+  return (
+    <details className="rounded-xl border border-border bg-surface px-4 py-3 text-xs">
+      <summary className="cursor-pointer font-semibold text-text">What do these metrics mean?</summary>
+      <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+        {rows.map(([term, help]) => (
+          <div key={term}>
+            <dt className="font-semibold text-text">{term}</dt>
+            <dd className="text-muted">{help}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-muted">
+        Severity: <strong>High</strong> needs a look soon, <strong>Medium</strong> is worth checking, <strong>Low</strong> is informational. No signal
+        ever pauses, blocks or submits the assessment; you decide what each one means.
+      </p>
+    </details>
   );
 }
 
@@ -312,7 +384,7 @@ function RealDetails({ sessionId, examId, live }: { sessionId: string; examId: s
     <Table>
       <THead>
         <tr>
-          <TH>Time</TH>
+          <TH>Date & time</TH>
           <TH>Event</TH>
           <TH>Direction</TH>
           <TH>Duration</TH>
@@ -324,8 +396,11 @@ function RealDetails({ sessionId, examId, live }: { sessionId: string; examId: s
       <TBody>
         {items.map((i) => (
           <TR key={i.id}>
-            <TD className="font-mono text-[13px]">
-              {i.exam_clock_ms !== null ? formatClock(i.exam_clock_ms) : new Date(i.started_at).toLocaleTimeString()}
+            <TD className="whitespace-nowrap">
+              <div className="text-[13px] text-text">{formatStamp(i.started_at)}</div>
+              {i.exam_clock_ms !== null && (
+                <div className="font-mono text-[11px] text-muted">{formatClock(i.exam_clock_ms)} into the assessment</div>
+              )}
             </TD>
             <TD><EventCell item={i} /></TD>
             <TD className="capitalize">{i.direction ?? "—"}</TD>
@@ -467,8 +542,8 @@ function LiveCamPanel({ card, state, connected, onClose }: { card: CandidateCard
             <div className="text-lg font-semibold text-text">{card.headGlances + card.eyeGlances}</div>
           </div>
           <div className="rounded-lg bg-surface-muted p-2">
-            <div className="text-muted">Other alerts</div>
-            <div className="text-lg font-semibold text-text">{card.otherAlerts}</div>
+            <div className="text-muted">Left the tab</div>
+            <div className="text-lg font-semibold text-text">{card.alertsByType.TAB_SWITCH ?? 0}</div>
           </div>
         </div>
 
@@ -478,7 +553,7 @@ function LiveCamPanel({ card, state, connected, onClose }: { card: CandidateCard
             <ul className="space-y-1 text-sm">
               {state.recent.map((a, i) => (
                 <li key={i} className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-muted">{a.at ? new Date(a.at).toLocaleTimeString() : ""}</span>
+                  <span className="font-mono text-xs text-muted">{a.at ? formatStamp(a.at) : ""}</span>
                   {a.kind === "glance" ? (
                     <GlanceChip source={a.source === "eyes" ? "eyes" : "head"} durationMs={a.duration_ms} />
                   ) : a.kind === "red_flag" || a.kind === "post_limit" ? (
@@ -542,24 +617,29 @@ function CandidateProctoringCard({
           {card.email && <div className="text-xs text-muted">{card.email}</div>}
         </div>
         <dl className="flex flex-wrap gap-2 text-xs">
-          <div className={cn("rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}>
+          <div title={METRIC_HELP.redFlags} className={cn("cursor-help rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}>
             <dt className="inline">Red flags </dt>
             <dd className="inline font-semibold">{card.flags} / {card.maxFlags}</dd>
           </div>
-          <div className="rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
+          <div title={METRIC_HELP.headGlances} className="cursor-help rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
             <dt className="inline">Head glances </dt>
             <dd className="inline font-semibold">{card.headGlances}</dd>
           </div>
-          <div className="rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
+          <div title={METRIC_HELP.eyeGlances} className="cursor-help rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
             <dt className="inline">Eye glances </dt>
             <dd className="inline font-semibold">{card.eyeGlances}</dd>
           </div>
-          <div className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
-            <dt className="inline">Other alerts </dt>
-            <dd className="inline font-semibold">{card.otherAlerts}</dd>
-          </div>
+          {/* one chip per integrity alert type, instead of a vague "other" total */}
+          {Object.entries(card.alertsByType)
+            .filter(([, n]) => n > 0)
+            .map(([type, n]) => (
+              <div key={type} title={ALERT_HELP[type] ?? eventLabel(type)} className="cursor-help rounded-lg bg-warning-50 px-2.5 py-1 text-warning-800">
+                <dt className="inline">{eventLabel(type)} </dt>
+                <dd className="inline font-semibold">{n}</dd>
+              </div>
+            ))}
           {card.limitReached && (
-            <div className="rounded-lg bg-danger-50 px-2.5 py-1 text-danger-700">
+            <div title={METRIC_HELP.afterLimit} className="cursor-help rounded-lg bg-danger-50 px-2.5 py-1 text-danger-700">
               {/* incidents keep being recorded after the candidate's 3 notified flags */}
               <dt className="inline">Flag limit reached · after limit </dt>
               <dd className="inline font-semibold">{card.afterLimit}</dd>
@@ -696,6 +776,7 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
           )}
         </div>
       </div>
+      <MetricsLegend />
       {cards.length === 0 ? (
         <EmptyState message="No candidates yet. Assign candidates and send their links first." />
       ) : (
