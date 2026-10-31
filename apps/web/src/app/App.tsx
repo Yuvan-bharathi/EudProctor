@@ -55,6 +55,7 @@ export function App() {
       <Route path="/design-showcase" element={<Navigate to="/" replace />} />
       <Route path="/showcase" element={<Navigate to="/" replace />} />
       <Route path="/styleguide" element={<Navigate to="/" replace />} />
+      <Route path="/notifications" element={<Navigate to="/mentor/notifications" replace />} />
 
       {/* Admin Portal */}
       <Route path="/admin" element={<RoleLayout role="admin" />}>
@@ -85,6 +86,7 @@ export function App() {
       {/* Mentor Portal */}
       <Route path="/mentor" element={<RoleLayout role="mentor" />}>
         <Route index element={<MentorHomePage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="questions" element={<QuestionBankPage />} />
         <Route path="exams" element={<ExamsPage />} />
         <Route path="exams/:examId" element={<ExamDetailPage />} />
