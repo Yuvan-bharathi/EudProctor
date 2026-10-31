@@ -29,3 +29,4 @@ export function FloatingToast({ message, onClose }: FloatingToastProps) {
     </div>
   );
 }
+

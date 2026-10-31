@@ -144,6 +144,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [isPublishing, setIsPublishing] = useState(false);
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [questionToDelete, setQuestionToDelete] = useState<Question | null>(null);
+  const [isDeletingQuestion, setIsDeletingQuestion] = useState(false);
+  const [isRemovingCandidate, setIsRemovingCandidate] = useState(false);
 
   const formatExamWindow = (start?: string | null, end?: string | null) => {
     if (!start || !end) {
@@ -436,11 +439,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   // Candidate Actions: Remove (CRUD)
   const handleRemoveCandidate = (assignment: Assignment) => {
-    const updatedAssignments = assignments.filter((a) => a.id !== assignment.id);
-    setAssignments(updatedAssignments);
-    saveExamDetailToStorage(examId, { assignments: updatedAssignments });
-    setCandidateToRemove(null);
-    showToast(`Removed ${assignment.candidate_name} from this assessment.`);
+    setIsRemovingCandidate(true);
+    try {
+      const updatedAssignments = assignments.filter((a) => a.id !== assignment.id);
+      setAssignments(updatedAssignments);
+      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+      setCandidateToRemove(null);
+      showToast(`Removed candidate "${assignment.candidate_name}" from this assessment.`);
+    } finally {
+      setIsRemovingCandidate(false);
+    }
   };
 
   // Questions Actions: Custom Question Create / Edit
@@ -515,21 +523,30 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     }
   };
 
-  const handleDeleteQuestion = async (questionId: string) => {
-    const updated = questions.filter((q) => q.id !== questionId);
-    setQuestions(updated);
+  const handleConfirmDeleteQuestion = async () => {
+    if (!questionToDelete || isDeletingQuestion) return;
+    setIsDeletingQuestion(true);
+    const targetId = questionToDelete.id;
+    const updated = questions.filter((q) => q.id !== targetId);
+
     try {
       await api(`/exams/${examId}/questions`, {
         method: 'PUT',
         body: { question_ids: updated.map((q) => q.id) },
       });
+      setQuestions(updated);
+      saveExamDetailToStorage(examId, { questions: updated });
       qc.invalidateQueries({ queryKey: ['exam', examId] });
       qc.invalidateQueries({ queryKey: ['exams'] });
-      saveExamDetailToStorage(examId, { questions: updated });
+      setQuestionToDelete(null);
       showToast('Question deleted successfully.');
     } catch {
+      setQuestions(updated);
       saveExamDetailToStorage(examId, { questions: updated });
+      setQuestionToDelete(null);
       showToast('Question deleted successfully.');
+    } finally {
+      setIsDeletingQuestion(false);
     }
   };
 
@@ -1163,7 +1180,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteQuestion(q.id)}
+                          onClick={() => setQuestionToDelete(q)}
                           className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors"
                           title="Delete question"
                         >
@@ -2559,9 +2576,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               <Button
                 type="button"
                 onClick={() => handleRemoveCandidate(candidateToRemove)}
-                className="bg-danger-600 font-semibold text-white hover:bg-danger-700"
+                disabled={isRemovingCandidate}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer disabled:opacity-60"
               >
-                Confirm Removal
+                {isRemovingCandidate ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Removing...</span>
+                  </>
+                ) : (
+                  <span>Confirm Removal</span>
+                )}
               </Button>
             </div>
           </div>
@@ -2739,6 +2764,68 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE SINGLE QUESTION MODAL */}
+      {questionToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-danger-50 text-danger-600">
+                <Trash2 className="size-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-text">Delete Question</h3>
+                <p className="text-xs text-muted">Are you sure you want to delete this question?</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/80 bg-surface-muted/40 p-3 text-xs text-text">
+              <span className="font-semibold text-muted text-[11px] uppercase tracking-wider block mb-1">
+                Question Preview
+              </span>
+              <p className="line-clamp-3 text-text font-medium leading-relaxed">{questionToDelete.body}</p>
+            </div>
+
+            <p className="text-xs text-muted leading-relaxed">
+              This will remove the question from this assessment. Candidates will no longer be tested on this question.
+            </p>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-border">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setQuestionToDelete(null)}
+                disabled={isDeletingQuestion}
+                className="cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleConfirmDeleteQuestion}
+                disabled={isDeletingQuestion}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {isDeletingQuestion ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="size-3.5" />
+                    <span>Yes, Delete Question</span>
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       )}
