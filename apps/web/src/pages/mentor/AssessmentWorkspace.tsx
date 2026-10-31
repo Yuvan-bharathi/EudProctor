@@ -35,6 +35,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
+import { FloatingToast } from "@/components/FloatingToast";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -525,10 +526,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ['exam', examId] });
       qc.invalidateQueries({ queryKey: ['exams'] });
       saveExamDetailToStorage(examId, { questions: updated });
-      showToast('Question removed from assessment.');
+      showToast('Question deleted successfully.');
     } catch {
       saveExamDetailToStorage(examId, { questions: updated });
-      showToast('Question removed from assessment.');
+      showToast('Question deleted successfully.');
     }
   };
 
@@ -544,7 +545,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ['exam', examId] });
       qc.invalidateQueries({ queryKey: ['exams'] });
       setDeleteAllModalOpen(false);
-      showToast('All questions successfully deleted from this assessment.');
+      showToast('All questions deleted successfully.');
     } catch (err) {
       showToast(errorMessage(err));
     } finally {
@@ -725,18 +726,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   return (
     <div className={`space-y-6 ${fullScreen ? "fixed inset-0 z-50 overflow-y-auto bg-bg p-6" : ""}`}>
-      {/* Toast Notification Banner */}
-      {toastMessage && (
-        <div className="flex items-center justify-between rounded-xl border border-success-200 bg-success-50 px-4 py-2.5 text-xs font-semibold text-success-800 shadow-sm animate-in fade-in">
-          <span className="flex items-center gap-2">
-            <CheckCircle2 className="size-4 text-success-600" />
-            {toastMessage}
-          </span>
-          <button type="button" onClick={() => setToastMessage(null)} className="text-success-800 hover:text-text">
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
+      {/* Floating Top-Right Toast Notification (Overlays screen without shifting headings) */}
+      <FloatingToast message={toastMessage} onClose={() => setToastMessage(null)} />
 
       {/* Top Header with Back Button, Title, Status & Fullscreen Toggle */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">

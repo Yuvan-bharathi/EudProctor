@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart2,
-  CheckCircle2,
   Loader2,
   Calendar,
   Clock,
@@ -18,6 +17,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
+import { FloatingToast } from "@/components/FloatingToast";
 import { ErrorState } from "@/components/States";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -151,21 +151,8 @@ export function ExamsPage() {
 
   return (
     <div className="space-y-6">
-      {toastMessage && (
-        <div className="flex items-center justify-between rounded-xl border border-success-200 bg-success-50/90 px-4 py-3 text-xs font-semibold text-success-800 shadow-2xs backdrop-blur-2xs transition-all animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="size-4 shrink-0 text-success-600" />
-            <span>{toastMessage}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setToastMessage(null)}
-            className="rounded-lg p-1 text-success-700 hover:bg-success-100 cursor-pointer"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
+      {/* Floating Top-Right Toast Notification (Overlays screen without shifting headings) */}
+      <FloatingToast message={toastMessage} onClose={() => setToastMessage(null)} />
 
       {/* Top Header: Title & "+ Create assessment" button */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
