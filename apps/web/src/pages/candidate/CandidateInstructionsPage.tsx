@@ -6,8 +6,10 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/app/layouts";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 import { getPersistedAssessments } from "@/lib/mockData";
 
 export function CandidateInstructionsPage() {
@@ -16,8 +18,41 @@ export function CandidateInstructionsPage() {
   const [searchParams] = useSearchParams();
   const examId = searchParams.get("examId") || "ut-3";
 
+  const { data: remoteAssessments } = useQuery<{
+    exam_id: string;
+    title: string;
+    duration_min: number;
+    window_start: string;
+    window_end: string;
+  }[]>({
+    queryKey: ["candidate", "assessments"],
+    queryFn: () => api("/candidates/me/assessments"),
+  });
+
   const assessments = getPersistedAssessments();
   const exam = assessments.find((a) => a.id === examId) ?? assessments[0];
+
+  const remoteExam = remoteAssessments?.find((a) => a.exam_id === examId);
+  const now = Date.now();
+  let isExpired = false;
+
+  if (remoteExam) {
+    if (remoteExam.window_end) {
+      const end = new Date(remoteExam.window_end).getTime();
+      if (!isNaN(end) && end < now) isExpired = true;
+    } else if (remoteExam.window_start) {
+      const start = new Date(remoteExam.window_start).getTime();
+      if (!isNaN(start) && start + (remoteExam.duration_min || 60) * 60000 < now) isExpired = true;
+    }
+  } else if (exam) {
+    const dateStr = exam.scheduled_end || exam.scheduled_start || exam.scheduledDate || exam.createdDate;
+    if (dateStr) {
+      const parsed = new Date(dateStr).getTime();
+      if (!isNaN(parsed) && parsed < now && exam.status !== "completed") {
+        isExpired = true;
+      }
+    }
+  }
 
   const [agreed, setAgreed] = useState(false);
 
@@ -30,6 +65,31 @@ export function CandidateInstructionsPage() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  if (isExpired) {
+    return (
+      <div className="mx-auto max-w-xl space-y-6 pt-12 text-center">
+        <div className="rounded-2xl border border-rose-200 bg-surface p-8 shadow-xs space-y-4">
+          <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+            <Clock className="size-7" />
+          </div>
+          <h2 className="text-xl font-bold text-text">Assessment Expired</h2>
+          <p className="text-xs text-muted leading-relaxed">
+            The examination window for <strong>{remoteExam?.title || exam?.title || "this assessment"}</strong> has passed.
+            Candidates cannot enter or attempt expired assessments. Please contact your mentor if you need an extended schedule.
+          </p>
+          <div className="pt-2">
+            <Button
+              onClick={() => navigate("/candidate/assessments")}
+              className="bg-primary-600 text-white hover:bg-primary-700 font-medium"
+            >
+              Return to My Assessments
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const steps = [
     { num: 1, label: "Instructions", active: true, done: false },
@@ -84,7 +144,7 @@ export function CandidateInstructionsPage() {
         <div className="space-y-6 rounded-xl border border-border bg-surface p-6 shadow-2xs">
           {/* Assessment Title & Metadata */}
           <div className="border-b border-border pb-4">
-            <h3 className="text-lg font-bold text-text">{exam?.title || "Unit test 3 - Applied Concepts"}</h3>
+            <h3 className="text-lg font-bold text-text">{remoteExam?.title || exam?.title || "Unit test 3 - Applied Concepts"}</h3>
             <p className="text-xs text-muted">{exam?.course || "Full Stack Development"}</p>
 
             <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted">
@@ -95,46 +155,53 @@ export function CandidateInstructionsPage() {
               <span>•</span>
               <span className="flex items-center gap-1.5 font-medium text-text">
                 <Clock className="size-3.5 text-primary-600" />
-                {exam?.duration_min || 60} minutes
+                {remoteExam?.duration_min || exam?.duration_min || 60} minutes
               </span>
               <span>•</span>
-              <span className="flex items-center gap-1.5">
-                Multiple choice
+              <span className="flex items-center gap-1.5 font-medium text-success-700">
+                <ShieldCheck className="size-3.5" />
+                Non-punitive capped monitoring
               </span>
             </div>
           </div>
 
-          {/* Important Instructions matching Screen 6 */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Important instructions</h4>
-
-            <ol className="list-decimal space-y-3 pl-4 text-xs leading-relaxed text-text">
-              <li>
-                <strong>Ensure you are in a quiet, well-lit place:</strong> Avoid harsh backlighting so the camera
-                can verify your face without glares or shadows.
-              </li>
-              <li>
-                <strong>Keep your face clearly visible throughout the assessment:</strong> Your webcam will gently verify
-                your presence. Video never leaves your computer.
-              </li>
-              <li>
-                <strong>Do not use external devices, notes or other applications:</strong> Full screen and focus
-                integrity are recorded. Copying text is restricted.
-              </li>
-              <li className="text-primary-700">
-                <strong>You can complete the assessment even if a flag is raised:</strong> Proctoring flags never
-                automatically pause, disqualify, or submit your exam.
-              </li>
-            </ol>
+          {/* Calming Proctoring Disclosure Banner */}
+          <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="size-5 shrink-0 text-primary-700 mt-0.5" />
+              <div className="space-y-1 text-xs">
+                <h4 className="font-semibold text-text">Calibrated Academic Integrity Support</h4>
+                <p className="text-muted leading-relaxed">
+                  EduProctor is designed to give you peace of mind. Our camera and environment checks assist you
+                  in staying focused. You receive up to 3 gentle notifications if head pose shifts away from screen.
+                  <strong> No algorithmic termination takes place.</strong> All integrity reports are personally evaluated
+                  by your course mentor.
+                </p>
+              </div>
+            </div>
           </div>
 
-          {/* Privacy Note */}
-          <div className="flex items-start gap-3 rounded-lg bg-surface-muted p-3 text-xs text-muted">
-            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary-600" />
-            <p>
-              Under the India DPDP Act 2023, continuous raw video is never transmitted or stored on servers. Only
-              lightweight encrypted telemetry and small evidence snapshots are saved for mentor review.
-            </p>
+          {/* Test Taking Guidelines */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Test Protocol</h4>
+            <ul className="space-y-2 text-xs text-text">
+              <li className="flex items-start gap-2">
+                <div className="mt-1 size-1.5 shrink-0 rounded-full bg-primary-600" />
+                <span>Sit in a reasonably lit, quiet space with your webcam facing you.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="mt-1 size-1.5 shrink-0 rounded-full bg-primary-600" />
+                <span>Keep your browser window active. Switching tabs triggers an advisory notification.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="mt-1 size-1.5 shrink-0 rounded-full bg-primary-600" />
+                <span>You can utilize the built-in scratchpad and calculator on questions where permitted.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="mt-1 size-1.5 shrink-0 rounded-full bg-primary-600" />
+                <span>Answers save continuously on every selection. You will not lose progress on network reconnects.</span>
+              </li>
+            </ul>
           </div>
 
           {/* Consent Checkbox */}
