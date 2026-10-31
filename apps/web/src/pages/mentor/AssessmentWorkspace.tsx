@@ -81,7 +81,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const isLocationAdmin = location.pathname.startsWith("/admin");
   const qc = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab);
+  const [tabParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() =>
+    tabParams.get("tab") === "proctoring" ? "proctoring" : initialTab,
+  );
   const [fullScreen, setFullScreen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -1571,15 +1574,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                 )}
 
                                 <Button
-                                  asChild
                                   variant="secondary"
                                   size="sm"
+                                  onClick={() => setActiveTab("proctoring")}
                                   className="gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-800 h-8"
                                 >
-                                  <Link to={`/mentor/sessions/${a.session_id ?? "s1"}`}>
-                                    <Eye className="size-3.5" />
-                                    <span>Timeline</span>
-                                  </Link>
+                                  <Eye className="size-3.5" />
+                                  <span>Timeline</span>
                                 </Button>
 
                                 {!isLocationAdmin && (
@@ -1714,13 +1715,14 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       <TD className="text-xs text-muted">{cand.lastActivity}</TD>
 
                       <TD className="text-right">
-                        <Link
-                          to="/mentor/sessions/s1"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline"
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("proctoring")}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline cursor-pointer"
                         >
                           <span>Timeline</span>
                           <ChevronRight className="size-3.5" />
-                        </Link>
+                        </button>
                       </TD>
                     </TR>
                   ))}

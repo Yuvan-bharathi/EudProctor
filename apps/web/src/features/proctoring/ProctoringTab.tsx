@@ -25,7 +25,6 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { GlanceChip, RedFlagChip, SeverityBadge, type LookSource } from "@/components/ProctorChips";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +52,7 @@ interface LiveRow {
   other_alerts: number;
   high_alerts: number;
   open_identity_reviews: number;
+  post_limit?: number;
   started_at?: string | null;
   looking_away?: { source?: LookSource; direction?: string; duration_ms?: number } | null;
   recent_alerts?: LiveAlert[];
@@ -104,6 +104,7 @@ interface CandidateCard {
   flags: number;
   maxFlags: number;
   limitReached: boolean;
+  afterLimit: number;
   headGlances: number;
   eyeGlances: number;
   otherAlerts: number;
@@ -121,7 +122,7 @@ function fromLive(r: LiveRow, emails: Map<string, string>): CandidateCard {
   const label = { live: "Taking the assessment", submitted: "Submitted", identity: "Verifying identity", closed: r.status.replace(/_/g, " "), not_started: "Not started" }[status];
   return {
     key: r.session_id, sessionId: r.session_id, name: r.candidate_name, email: emails.get(r.candidate_id) ?? "", status, statusLabel: label,
-    flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, headGlances: r.head_glances, eyeGlances: r.eye_glances,
+    flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, afterLimit: r.post_limit ?? 0, headGlances: r.head_glances, eyeGlances: r.eye_glances,
     otherAlerts: r.other_alerts, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
   };
 }
@@ -129,7 +130,7 @@ function fromLive(r: LiveRow, emails: Map<string, string>): CandidateCard {
 function fromAssignment(a: Assignment): CandidateCard {
   return {
     key: `assignment-${a.id}`, sessionId: null, name: a.candidate_name, email: a.candidate_email, status: "not_started",
-    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, headGlances: 0, eyeGlances: 0, otherAlerts: 0,
+    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, afterLimit: 0, headGlances: 0, eyeGlances: 0, otherAlerts: 0,
     highAlerts: 0, identityReviews: 0,
   };
 }
@@ -138,7 +139,7 @@ function fromSample(r: LiveCandidateRow): CandidateCard {
   const status = r.status === "In progress" ? "live" : r.status === "Completed" ? "submitted" : "not_started";
   return {
     key: r.id, sessionId: null, name: r.name, email: r.email, status, statusLabel: r.status === "In progress" ? "Taking the assessment" : r.status,
-    flags: r.flags, maxFlags: r.maxFlags, limitReached: false, headGlances: r.flags + 2, eyeGlances: r.isGlancing ? 4 : 1,
+    flags: r.flags, maxFlags: r.maxFlags, limitReached: false, afterLimit: 0, headGlances: r.flags + 2, eyeGlances: r.isGlancing ? 4 : 1,
     otherAlerts: r.status === "Not started" ? 0 : 1, highAlerts: 0, identityReviews: 0, sample: r,
   };
 }
@@ -557,7 +558,13 @@ function CandidateProctoringCard({
             <dt className="inline">Other alerts </dt>
             <dd className="inline font-semibold">{card.otherAlerts}</dd>
           </div>
-          {card.limitReached && <Badge tone="danger">Flag limit reached</Badge>}
+          {card.limitReached && (
+            <div className="rounded-lg bg-danger-50 px-2.5 py-1 text-danger-700">
+              {/* incidents keep being recorded after the candidate's 3 notified flags */}
+              <dt className="inline">Flag limit reached · after limit </dt>
+              <dd className="inline font-semibold">{card.afterLimit}</dd>
+            </div>
+          )}
           {card.identityReviews > 0 && <Badge tone="warning"><AlertTriangle aria-hidden="true" /> Identity review</Badge>}
         </dl>
         <div className="flex items-center gap-2">
@@ -580,11 +587,6 @@ function CandidateProctoringCard({
             <SampleDetails />
           ) : (
             <p className="text-sm text-muted">This candidate has not started the assessment yet.</p>
-          )}
-          {card.sessionId && (
-            <Link to={`/mentor/sessions/${card.sessionId}`} className="inline-block text-sm text-primary-700 underline underline-offset-2">
-              Open full proctoring page
-            </Link>
           )}
         </div>
       )}

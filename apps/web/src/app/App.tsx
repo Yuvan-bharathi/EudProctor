@@ -23,7 +23,6 @@ import { IdentityReviewPage } from "@/pages/mentor/IdentityReviewPage";
 import { MarkingPage } from "@/pages/mentor/MarkingPage";
 import { MentorHomePage } from "@/pages/mentor/MentorHomePage";
 import { QuestionBankPage } from "@/pages/mentor/QuestionBankPage";
-import { SessionDetailsPage } from "@/pages/mentor/SessionDetailsPage";
 import { AdminAttendanceAuditPage } from "@/pages/internship/admin/AdminAttendanceAuditPage";
 import { AdminCodingBankPage } from "@/pages/internship/admin/AdminCodingBankPage";
 import { AdminCohortsPage } from "@/pages/internship/admin/AdminCohortsPage";
@@ -66,7 +65,8 @@ export function App() {
         <Route path="exams" element={<ExamsPage />} />
         <Route path="exams/:examId" element={<ExamDetailPage />} />
         <Route path="exams/:examId/results" element={<ExamResultsPage />} />
-        <Route path="sessions/:sessionId" element={<SessionDetailsPage />} />
+        {/* proctoring lives in each assessment's Proctoring tab; old session links land on the list */}
+        <Route path="sessions/:sessionId" element={<Navigate to="/admin/exams" replace />} />
         <Route path="courses" element={<Navigate to="/admin/exams" replace />} />
         <Route path="courses/:courseId" element={<Navigate to="/admin/exams" replace />} />
         <Route path="notes" element={<Navigate to="/admin/exams" replace />} />
@@ -100,7 +100,7 @@ export function App() {
         <Route path="proctoring" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="notes" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="identity" element={<IdentityReviewPage />} />
-        <Route path="sessions/:sessionId" element={<SessionDetailsPage />} />
+        <Route path="sessions/:sessionId" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="sessions/:sessionId/result" element={<CandidateResultPage />} />
         <Route path="sessions/:sessionId/summary" element={<CandidateResultPage />} />
         <Route path="agent" element={<Navigate to="/mentor" replace />} />

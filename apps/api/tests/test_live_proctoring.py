@@ -118,3 +118,25 @@ def test_tab_switch_raises_capped_red_flags(client, db, mentor, course, candidat
     assert details["summary"]["red_flags"] == 3 and details["summary"]["post_limit"] == 1
     db.expire_all()
     assert db.get(ExamSession, sess.id).status == SessionStatus.in_progress  # rule 1: never pauses or submits
+
+
+def test_course_mentor_sees_details_and_post_limit_count(client, db, mentor, course, candidate):
+    from app.models import CourseMember, MemberRole
+
+    exam = build_exam(db, course, mentor, duration_min=60)  # created by `mentor`
+    sess = build_session(db, exam, candidate)
+    sess.started_at = utcnow() - timedelta(minutes=10)
+    co_mentor = make_user(db, Role.mentor, email="co-mentor@example.com")
+    db.add(CourseMember(course_id=course.id, user_id=co_mentor.id, role=MemberRole.mentor))
+    db.commit()
+
+    def tab(offset_s):
+        started = sess.started_at + timedelta(seconds=offset_s)
+        return {"client_event_id": uuid.uuid4().hex, "type": "TAB_SWITCH", "started_at": started.isoformat(), "duration_ms": 5000}
+
+    client.post(f"/api/v1/sessions/{sess.id}/events", headers=auth(candidate), json={"events": [tab(20 * i + 10) for i in range(5)]})
+
+    details = client.get(f"/api/v1/mentor/sessions/{sess.id}/details", headers=auth(co_mentor))
+    assert details.status_code == 200 and details.json()["summary"]["post_limit"] == 2
+    row = client.get(f"/api/v1/mentor/exams/{exam.id}/live", headers=auth(co_mentor)).json()[0]
+    assert row["flag_count"] == 3 and row["post_limit"] == 2 and row["flag_limit_reached"] is True

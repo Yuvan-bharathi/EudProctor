@@ -14,6 +14,7 @@ from app.core.deps import mentor_only
 from app.models import Exam, ExamSession, SessionStatus, User
 from app.models.base import utcnow
 from app.models.identity import CheckKind, IdentityCheck, ReviewDecision
+from app.routers.courses import mentor_course_ids
 from app.services import sessions as session_svc
 
 router = APIRouter(prefix="/mentor", tags=["mentor"], dependencies=[Depends(mentor_only)])
@@ -24,7 +25,10 @@ def mentor_session(db: Session, mentor: User, session_id: uuid.UUID, lock: bool 
     if lock:
         q = q.with_for_update()
     sess = db.scalar(q)
-    if sess is None or sess.exam.mentor_id != mentor.id:
+    # same access as own_exam: the assessment's creator or any mentor of its course
+    if sess is None or (
+        sess.exam.mentor_id != mentor.id and sess.exam.course_id not in mentor_course_ids(db, mentor)
+    ):
         raise HTTPException(404, "Session not found")
     return sess
 

@@ -70,7 +70,7 @@ class ReviewIn(BaseModel):
 
 def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
     out: dict[uuid.UUID, dict[str, int]] = {
-        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0} for sid in session_ids
+        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0, "post_limit": 0} for sid in session_ids
     }
     if not session_ids:
         return out
@@ -88,20 +88,21 @@ def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[s
         out[sid]["alerts"] += n
         if sev == "high":
             out[sid]["high"] += n
+    for sid, n in db.execute(  # flagged incidents after the candidate reached max flags
+        select(CandidateFlag.session_id, func.count())
+        .where(CandidateFlag.session_id.in_(session_ids), CandidateFlag.flag_no.is_(None))
+        .group_by(CandidateFlag.session_id)
+    ):
+        out[sid]["post_limit"] = n
     return out
 
 
 def summary_for(db: Session, sess: ExamSession) -> Summary:
     c = _counts(db, [sess.id])[sess.id]
-    post_limit = db.scalar(
-        select(func.count())
-        .select_from(CandidateFlag)
-        .where(CandidateFlag.session_id == sess.id, CandidateFlag.flag_no.is_(None))
-    )
     return Summary(
         red_flags=min(sess.flag_count, sess.exam.max_flags),
         max_flags=sess.exam.max_flags,
-        post_limit=post_limit,
+        post_limit=c["post_limit"],
         head_glances=c["head"],
         eye_glances=c["eyes"],
         other_alerts=c["alerts"],
@@ -251,6 +252,7 @@ class LiveRow(BaseModel):
     other_alerts: int
     high_alerts: int
     open_identity_reviews: int
+    post_limit: int = 0
     started_at: datetime | None = None
     looking_away: dict | None = None  # ongoing look-away right now (source, direction, duration_ms)
     recent_alerts: list[dict] = []  # latest alerts, newest first
@@ -271,6 +273,7 @@ def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, int], reviews: i
         other_alerts=c["alerts"],
         high_alerts=c["high"],
         open_identity_reviews=reviews,
+        post_limit=c["post_limit"],
         started_at=s.started_at,
         looking_away=ongoing if s.status.value == "in_progress" else None,
         recent_alerts=recent,
