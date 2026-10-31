@@ -12,7 +12,6 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { type Role, useAuth } from "@/features/auth/store";
 import {
   type AppModuleMode,
-  getActiveAppModule,
   setActiveAppModule,
 } from "@/lib/mockData";
 import { cn } from "@/lib/utils";
@@ -72,7 +71,7 @@ export function AppShell({
 
   const [activeModule, setActiveModuleState] = useState<AppModuleMode>(() => {
     if (location.pathname.includes("/internship")) return "internship";
-    return getActiveAppModule();
+    return "interview";
   });
 
   useEffect(() => {
@@ -80,10 +79,8 @@ export function AppShell({
       setActiveModuleState("internship");
       setActiveAppModule("internship");
     } else {
-      const stored = getActiveAppModule();
-      if (stored === "interview") {
-        setActiveModuleState("interview");
-      }
+      setActiveModuleState("interview");
+      setActiveAppModule("interview");
     }
   }, [location.pathname]);
 

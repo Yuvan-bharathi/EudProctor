@@ -3013,9 +3013,9 @@ const APP_MODULE_KEY = "eduproctor_active_module";
 export type AppModuleMode = "interview" | "internship";
 
 export function getActiveAppModule(): AppModuleMode {
-  if (typeof window === "undefined") return "internship";
+  if (typeof window === "undefined") return "interview";
   const stored = localStorage.getItem(APP_MODULE_KEY);
-  return (stored as AppModuleMode) || "internship";
+  return (stored as AppModuleMode) || "interview";
 }
 
 export function setActiveAppModule(mode: AppModuleMode) {

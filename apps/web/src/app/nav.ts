@@ -65,7 +65,7 @@ const internshipNav: Record<Role, NavItem[]> = {
   ],
 };
 
-export function navFor(role: Role, mode: AppModuleMode = "internship"): NavItem[] {
+export function navFor(role: Role, mode: AppModuleMode = "interview"): NavItem[] {
   if (mode === "internship") {
     return internshipNav[role] ?? [];
   }
