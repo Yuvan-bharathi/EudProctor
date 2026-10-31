@@ -402,8 +402,11 @@ export function CandidateExamPage() {
 
               {/* Radio Options A, B, C, D */}
               <div className="space-y-3">
-                {currentQuestionData.options?.map((opt) => {
+                {currentQuestionData.options?.map((opt, idx) => {
+                  // options may be shuffled per candidate: letters follow the display order,
+                  // while the saved answer stays the option's own key (used for scoring)
                   const isSelected = currentSelectedOption === opt.key;
+                  const displayLetter = String.fromCharCode(65 + idx);
                   return (
                     <label
                       key={opt.key}
@@ -421,7 +424,7 @@ export function CandidateExamPage() {
                             : "border border-border bg-surface text-muted"
                         }`}
                       >
-                        {opt.key}
+                        {displayLetter}
                       </div>
                       <span className="leading-relaxed">{opt.text}</span>
                     </label>
