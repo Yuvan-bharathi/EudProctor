@@ -1,6 +1,6 @@
-import { GraduationCap, Shield, Sparkles, User } from "lucide-react";
+import { GraduationCap, Shield, User } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { ErrorState } from "@/components/States";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";

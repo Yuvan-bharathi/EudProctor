@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { CoursePicker } from "@/features/mentor/CoursePicker";
 import { api, errorMessage } from "@/lib/api";
-import { mockAssessments, saveAssessmentToStorage } from "@/lib/mockData";
 import type { Exam } from "@/lib/types";
 
 function localInput(d: Date) {

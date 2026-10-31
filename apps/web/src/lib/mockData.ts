@@ -584,9 +584,16 @@ export const mockCandidateDashboard = {
     title: "Unit test 1 - Basics",
     course: "Backend",
     score: 82,
+    classAverage: 76,
+    integrityBadge: "100% Academic Integrity Verified",
     status: "Published",
     publishedDate: "12 Jan 2026",
   },
+  practiceTopicsList: [
+    { id: "t1", name: "Core Architecture & Concepts", questions: 24 },
+    { id: "t2", name: "Applied Frameworks & Tooling", questions: 32 },
+    { id: "t3", name: "Performance, Security & Scale", questions: 18 },
+  ],
 };
 
 export interface TopicMasteryItem {

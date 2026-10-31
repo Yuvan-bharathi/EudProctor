@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   Filter,
   HelpCircle,
+  Loader2,
   Mail,
   Maximize2,
   Minimize2,
@@ -48,7 +49,6 @@ import {
 } from "@/lib/aiQuestionGenerator";
 import { api, errorMessage } from "@/lib/api";
 import {
-  convertToQuestions,
   downloadSampleQuestionsTemplate,
   type ParsedQuestionRow,
   parseQuestionsFromFile,
@@ -63,7 +63,6 @@ import {
   type LiveCandidateRow,
   mockLiveCandidates,
   mockQuestionsList,
-  publishAndScheduleAssessment,
   saveExamDetailToStorage,
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
@@ -127,7 +126,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     return found?.status ?? (rawCardStatus ?? (exam?.status === "closed" ? "completed" : exam?.status === "scheduled" ? "scheduled" : "draft"));
   });
 
-  const [assessmentCard, setAssessmentCard] = useState(() => {
+  const [, setAssessmentCard] = useState(() => {
     const list = getPersistedAssessments();
     return list.find((a) => a.id === examId) || null;
   });
@@ -212,12 +211,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     const startIso = new Date(`${scheduleDate}T${scheduleStartTime}:00`).toISOString();
     const endIso = new Date(`${scheduleDate}T${scheduleEndTime}:00`).toISOString();
 
-    const formattedDate =
-      new Date(`${scheduleDate}T${scheduleStartTime}:00`).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      }) + `, ${scheduleStartTime} – ${scheduleEndTime}`;
 
     try {
       await api(`/exams/${examId}`, {
