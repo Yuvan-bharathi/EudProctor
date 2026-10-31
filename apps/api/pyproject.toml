@@ -18,6 +18,8 @@ dependencies = [
   "pillow>=11",
   "numpy>=2.1",
   "jsonschema>=4.23",
+  "python-multipart>=0.0.9",
+  "pymysql>=1.1.1",
 ]
 
 [dependency-groups]

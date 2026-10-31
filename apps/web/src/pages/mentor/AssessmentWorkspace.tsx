@@ -28,7 +28,14 @@ import {
   Trash2,
   Upload,
   Users,
+  Wand2,
   X,
+  Bot,
+  Lightbulb,
+  RefreshCw,
+  ExternalLink,
+  Clock,
+  Ban,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
@@ -45,10 +52,12 @@ import {
   type AIQuestionSuggestion,
   convertAIQuestionsToQuestions,
   generateAIQuestions,
+  generateOptionsForStem,
+  generateSingleQuestion,
+  recommendAIQuestions,
 } from "@/lib/aiQuestionGenerator";
 import { api, errorMessage } from "@/lib/api";
 import {
-  convertToQuestions,
   downloadSampleQuestionsTemplate,
   type ParsedQuestionRow,
   parseQuestionsFromFile,
@@ -63,7 +72,6 @@ import {
   type LiveCandidateRow,
   mockLiveCandidates,
   mockQuestionsList,
-  publishAndScheduleAssessment,
   saveExamDetailToStorage,
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
@@ -179,13 +187,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     const startIso = new Date(`${scheduleDate}T${scheduleStartTime}:00`).toISOString();
     const endIso = new Date(`${scheduleDate}T${scheduleEndTime}:00`).toISOString();
 
-    const formattedDate =
-      new Date(`${scheduleDate}T${scheduleStartTime}:00`).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      }) + `, ${scheduleStartTime} – ${scheduleEndTime}`;
-
     try {
       await api(`/exams/${examId}`, {
         method: "PATCH",
@@ -198,7 +199,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
       let sentCount = 0;
       if (sendTestLinkEmails) {
-        const linksRes = await api<Assignment[]>(`/exams/${examId}/send-links`, { body: {} });
+        const linksRes = await api<Assignment[]>(`/exams/${examId}/send-links`, {
+          body: {
+            force_resend: false,
+            test_mode: yopmailTestMode,
+            test_recipient: yopmailTestMode ? yopmailTestRecipient.trim() : undefined,
+          },
+        });
         sentCount = linksRes?.length || 0;
       }
 
@@ -256,6 +263,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   // State for candidate search & filter in candidates tab
   const [candidateSearch, setCandidateSearch] = useState("");
   const [candidateStatusFilter, setCandidateStatusFilter] = useState("all");
+  const [invitationStatusFilter, setInvitationStatusFilter] = useState("all");
+
+  // State for YOPmail Testing & LangGraph Invitation Agent
+  const [yopmailTestMode, setYopmailTestMode] = useState(true);
+  const [yopmailTestRecipient, setYopmailTestRecipient] = useState("eduproctor-test@yopmail.com");
 
   // State for Live Stream Filter inside Candidates tab
   const [liveSearch, setLiveSearch] = useState("");
@@ -265,10 +277,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   // 1. Add Custom Question Modal
   const [customQuestionModalOpen, setCustomQuestionModalOpen] = useState(false);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
-  const [customBody, setCustomBody] = useState("");
-  const [customTopic, setCustomTopic] = useState("Full Stack Development");
-  const [customMarks, setCustomMarks] = useState(2);
+  const [customSubject, setCustomSubject] = useState("Full Stack Development");
+  const [customTopic, setCustomTopic] = useState("Full Stack Architecture");
+  const [customMarks, setCustomMarks] = useState(3);
   const [customDifficulty, setCustomDifficulty] = useState<1 | 2 | 3>(2);
+  const [customQuestionType, setCustomQuestionType] = useState<"mcq" | "short">("mcq");
+  const [customBody, setCustomBody] = useState("");
   const [customOptionA, setCustomOptionA] = useState("");
   const [customOptionB, setCustomOptionB] = useState("");
   const [customOptionC, setCustomOptionC] = useState("");
@@ -276,12 +290,20 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [customCorrectKey, setCustomCorrectKey] = useState<"A" | "B" | "C" | "D">("A");
   const [customExplanation, setCustomExplanation] = useState("");
 
-  // 2. AI Question Suggestions Modal
-  const [aiModalOpen, setAiModalOpen] = useState(false);
-  const [aiTopicInput, setAiTopicInput] = useState("Full Stack Development");
-  const [aiQuestions, setAiQuestions] = useState<AIQuestionSuggestion[]>([]);
-  const [selectedAiIds, setSelectedAiIds] = useState<Set<string>>(new Set());
-  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  // In-Modal AI Question Recommendation Agent State
+  const [inModalAiRecs, setInModalAiRecs] = useState<AIQuestionSuggestion[]>([]);
+  const [isInModalAiLoading, setIsInModalAiLoading] = useState(false);
+  const [inModalAiError, setInModalAiError] = useState<string | null>(null);
+  const manualEditorRef = useRef<HTMLDivElement>(null);
+
+  // In-Workspace AI Copilot Agent State
+  const [showAiCopilot, setShowAiCopilot] = useState(false);
+  const [copilotTopic, setCopilotTopic] = useState("");
+  const [copilotDifficulty, setCopilotDifficulty] = useState<0 | 1 | 2 | 3>(0);
+  const [copilotCount, setCopilotCount] = useState<number>(3);
+  const [copilotSuggestions, setCopilotSuggestions] = useState<AIQuestionSuggestion[]>([]);
+  const [isCopilotGenerating, setIsCopilotGenerating] = useState(false);
+  const [copilotStatusText, setCopilotStatusText] = useState("Agent Ready");
 
   // 3. Excel File Upload Modal
   const [excelModalOpen, setExcelModalOpen] = useState(false);
@@ -305,12 +327,50 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       const matchesSearch =
         a.candidate_name.toLowerCase().includes(q) ||
         a.candidate_email.toLowerCase().includes(q) ||
-        (a.status && a.status.toLowerCase().includes(q));
+        (a.status && a.status.toLowerCase().includes(q)) ||
+        (a.invitation_status && a.invitation_status.toLowerCase().includes(q));
 
-      if (candidateStatusFilter === "all") return matchesSearch;
-      return matchesSearch && a.status?.toLowerCase() === candidateStatusFilter.toLowerCase();
+      const matchesStatus =
+        candidateStatusFilter === "all" || a.status?.toLowerCase() === candidateStatusFilter.toLowerCase();
+
+      const matchesInvStatus =
+        invitationStatusFilter === "all" ||
+        (a.invitation_status || "Not Sent").toLowerCase() === invitationStatusFilter.toLowerCase();
+
+      return matchesSearch && matchesStatus && matchesInvStatus;
     });
-  }, [assignments, candidateSearch, candidateStatusFilter]);
+  }, [assignments, candidateSearch, candidateStatusFilter, invitationStatusFilter]);
+
+  // Invitation status statistics for dashboard counters
+  const invitationStats = useMemo(() => {
+    const totalEnrolled = assignments.length;
+    let totalSent = 0;
+    let delivered = 0;
+    let accepted = 0;
+    let failed = 0;
+    let pending = 0;
+
+    for (const a of assignments) {
+      const st = a.invitation_status || "Not Sent";
+      if (st === "Accepted") {
+        accepted++;
+        totalSent++;
+      } else if (st === "Delivered") {
+        delivered++;
+        totalSent++;
+      } else if (st === "Sent") {
+        totalSent++;
+      } else if (st === "Failed") {
+        failed++;
+      } else if (st === "Pending" || st === "Not Sent") {
+        pending++;
+      } else {
+        totalSent++;
+      }
+    }
+
+    return { totalEnrolled, totalSent, delivered, accepted, failed, pending };
+  }, [assignments]);
 
   // Live monitor filtered list
   const liveCandidates: LiveCandidateRow[] = mockLiveCandidates;
@@ -324,13 +384,51 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     });
   }, [liveCandidates, liveSearch, liveStatusFilter]);
 
-  // Dispatch links mutation
+  // Dispatch links mutation via LangGraph Assessment Invitation Agent
   const sendLinksMutation = useMutation({
-    mutationFn: () => api(`/exams/${examId}/send-links`, { body: {} }),
-    onSuccess: () => {
+    mutationFn: (vars?: { forceResend?: boolean }) =>
+      api<Assignment[]>(`/exams/${examId}/send-links`, {
+        body: {
+          force_resend: vars?.forceResend ?? false,
+          test_mode: yopmailTestMode,
+          test_recipient: yopmailTestMode ? yopmailTestRecipient.trim() : undefined,
+        },
+      }),
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["exam", examId] });
-      showToast("Single-use assessment links dispatched to all candidates.");
+      showToast(`LangGraph Agent processed invitations for ${data?.length || 0} candidate(s).`);
     },
+    onError: (err) => showToast(errorMessage(err)),
+  });
+
+  // Resend single candidate invitation
+  const resendInvitationMutation = useMutation({
+    mutationFn: (candidateId: string) =>
+      api<Assignment>(`/exams/${examId}/candidates/${candidateId}/resend-invitation`, {
+        method: "POST",
+        body: {
+          test_mode: yopmailTestMode,
+          test_recipient: yopmailTestMode ? yopmailTestRecipient.trim() : undefined,
+        },
+      }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      showToast(`Invitation resent to ${data?.candidate_name || "candidate"} via LangGraph Agent.`);
+    },
+    onError: (err) => showToast(errorMessage(err)),
+  });
+
+  // Revoke single candidate invitation
+  const revokeInvitationMutation = useMutation({
+    mutationFn: (candidateId: string) =>
+      api<Assignment>(`/exams/${examId}/candidates/${candidateId}/revoke-invitation`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      showToast(`Invitation token revoked for ${data?.candidate_name || "candidate"}.`);
+    },
+    onError: (err) => showToast(errorMessage(err)),
   });
 
   // Candidate Actions: Add via Validated Input Form
@@ -411,16 +509,139 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const handleOpenAddCustomQuestion = () => {
     setEditingQuestionId(null);
     setCustomBody("");
-    setCustomTopic(exam?.course_name ?? "Full Stack Development");
-    setCustomMarks(2);
+    const subject = exam?.course_name ?? "Full Stack Development";
+    setCustomSubject(subject);
+    setCustomTopic("Full Stack Architecture");
+    setCustomMarks(3);
     setCustomDifficulty(2);
+    setCustomQuestionType("mcq");
     setCustomOptionA("");
     setCustomOptionB("");
     setCustomOptionC("");
     setCustomOptionD("");
     setCustomCorrectKey("A");
     setCustomExplanation("");
+    setInModalAiRecs([]);
     setCustomQuestionModalOpen(true);
+  };
+
+  // AI Question Recommendation Agent: Auto-triggering hook
+  useEffect(() => {
+    if (!customQuestionModalOpen || editingQuestionId) return;
+
+    const trimmedTopic = customTopic.trim();
+    if (!trimmedTopic) return;
+
+    const timer = setTimeout(async () => {
+      setIsInModalAiLoading(true);
+      setInModalAiError(null);
+      try {
+        const recs = await recommendAIQuestions({
+          subject: customSubject,
+          topic: trimmedTopic,
+          difficulty: customDifficulty,
+          marks: customMarks,
+          question_type: customQuestionType,
+          n: 3,
+          course_id: exam?.course_id,
+          exclude_bodies: questions.map((q) => q.body),
+        });
+        setInModalAiRecs(recs);
+      } catch (err) {
+        setInModalAiError("Unable to retrieve AI recommendations. You can continue creating manually.");
+      } finally {
+        setIsInModalAiLoading(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [
+    customQuestionModalOpen,
+    customTopic,
+    customDifficulty,
+    customMarks,
+    customSubject,
+    customQuestionType,
+    editingQuestionId,
+    exam?.course_id,
+    questions,
+  ]);
+
+  // AI Recommendation Actions inside Question Creation Modal
+  const handleUseAiRecommendation = (rec: AIQuestionSuggestion) => {
+    setCustomBody(rec.body);
+    setCustomTopic(rec.topic);
+    setCustomDifficulty(rec.difficulty as 1 | 2 | 3);
+    setCustomMarks(rec.marks);
+    setCustomOptionA(rec.options[0]?.text ?? "");
+    setCustomOptionB(rec.options[1]?.text ?? "");
+    setCustomOptionC(rec.options[2]?.text ?? "");
+    setCustomOptionD(rec.options[3]?.text ?? "");
+    const correctOpt = rec.options.find((o) => o.is_correct);
+    setCustomCorrectKey((correctOpt?.key as "A" | "B" | "C" | "D") || "A");
+    setCustomExplanation(rec.explanation ?? "");
+    showToast(`Loaded AI Recommendation (${rec.id}) into form fields.`);
+    manualEditorRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleRegenerateSingleRecommendation = async (index: number) => {
+    setIsInModalAiLoading(true);
+    try {
+      const exclude = [
+        ...inModalAiRecs.map((r) => r.body),
+        ...questions.map((q) => q.body),
+      ];
+      const newRecs = await recommendAIQuestions({
+        subject: customSubject,
+        topic: customTopic,
+        difficulty: customDifficulty,
+        marks: customMarks,
+        question_type: customQuestionType,
+        n: 1,
+        course_id: exam?.course_id,
+        exclude_bodies: exclude,
+      });
+      if (newRecs.length > 0) {
+        setInModalAiRecs((prev) => {
+          const next = [...prev];
+          next[index] = newRecs[0];
+          return next;
+        });
+        showToast("AI Agent regenerated a new non-repeating question recommendation.");
+      }
+    } catch {
+      showToast("Could not regenerate recommendation.");
+    } finally {
+      setIsInModalAiLoading(false);
+    }
+  };
+
+  const handleSkipRecommendation = (recId: string) => {
+    setInModalAiRecs((prev) => prev.filter((r) => r.id !== recId));
+    showToast("Recommendation dismissed.");
+  };
+
+  const handleManualTriggerRecommendations = async () => {
+    setIsInModalAiLoading(true);
+    setInModalAiError(null);
+    try {
+      const recs = await recommendAIQuestions({
+        subject: customSubject,
+        topic: customTopic,
+        difficulty: customDifficulty,
+        marks: customMarks,
+        question_type: customQuestionType,
+        n: 3,
+        course_id: exam?.course_id,
+        exclude_bodies: questions.map((q) => q.body),
+      });
+      setInModalAiRecs(recs);
+      showToast("AI Agent refreshed 3 question recommendations.");
+    } catch {
+      setInModalAiError("Could not refresh AI recommendations.");
+    } finally {
+      setIsInModalAiLoading(false);
+    }
   };
 
   const handleOpenEditQuestion = (q: Question) => {
@@ -482,34 +703,122 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     showToast("Question removed from assessment.");
   };
 
-  // Questions Actions: AI Agent Recommendations
-  const handleOpenAiModal = () => {
-    setAiTopicInput(exam?.course_name ? `${exam.course_name} Architecture` : "Full Stack Development");
-    setAiQuestions([]);
-    setSelectedAiIds(new Set());
-    setAiModalOpen(true);
-  };
+  // Dedicated AI Copilot Agent Handlers
+  const handleRunAiCopilot = (customTopic?: string) => {
+    const topicToUse = (customTopic || copilotTopic).trim() || exam?.course_name || "Full Stack Development";
+    setIsCopilotGenerating(true);
+    setCopilotStatusText("Analyzing course syllabus & Bloom taxonomy...");
 
-  const handleGenerateAiQuestions = () => {
-    setIsGeneratingAi(true);
     setTimeout(() => {
-      const generated = generateAIQuestions(aiTopicInput, 3);
-      setAiQuestions(generated);
-      setSelectedAiIds(new Set(generated.map((g) => g.id)));
-      setIsGeneratingAi(false);
-    }, 600);
+      setCopilotStatusText("Drafting question stems & distractor misconceptions...");
+    }, 300);
+
+    setTimeout(() => {
+      let results = generateAIQuestions(topicToUse, copilotCount === 1 ? 2 : copilotCount + 1);
+      if (copilotDifficulty !== 0) {
+        const filtered = results.filter((q) => q.difficulty === copilotDifficulty);
+        if (filtered.length > 0) results = filtered;
+      }
+      const finalItems = results.slice(0, copilotCount);
+      setCopilotSuggestions(finalItems);
+      setIsCopilotGenerating(false);
+      setCopilotStatusText(`Agent ready · Synthesized ${finalItems.length} question(s) for "${topicToUse}".`);
+      showToast(`AI Agent generated ${finalItems.length} question recommendation(s).`);
+    }, 700);
   };
 
-  const handleAddAiQuestionsToAssessment = () => {
-    const selected = aiQuestions.filter((q) => selectedAiIds.has(q.id));
-    if (selected.length === 0) return;
+  const handleQuickAddAiQuestion = async (suggestion: AIQuestionSuggestion) => {
+    try {
+      const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
+        body: {
+          questions: [
+            {
+              body: suggestion.body,
+              difficulty: suggestion.difficulty,
+              marks: suggestion.marks,
+              subtopic: suggestion.topic || exam?.course_name || "General",
+              explanation: suggestion.explanation || undefined,
+              options: suggestion.options.map((opt) => ({
+                key: opt.key,
+                text: opt.text,
+                is_correct: opt.is_correct,
+              })),
+            },
+          ],
+        },
+      });
+      if (res?.questions) {
+        setQuestions(res.questions);
+      } else {
+        const converted = convertAIQuestionsToQuestions([suggestion], "c1");
+        const updated = [...converted, ...questions];
+        setQuestions(updated);
+        saveExamDetailToStorage(examId, { questions: updated });
+      }
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      qc.invalidateQueries({ queryKey: ["exams"] });
+      setCopilotSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+      showToast("Question added to assessment & saved to TiDB Cloud.");
+    } catch {
+      const converted = convertAIQuestionsToQuestions([suggestion], "c1");
+      const updated = [...converted, ...questions];
+      setQuestions(updated);
+      saveExamDetailToStorage(examId, { questions: updated });
+      setCopilotSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+      showToast("Question added to assessment.");
+    }
+  };
 
-    const converted = convertAIQuestionsToQuestions(selected, "c1");
-    const updated = [...converted, ...questions];
-    setQuestions(updated);
-    saveExamDetailToStorage(examId, { questions: updated });
-    setAiModalOpen(false);
-    showToast(`Added ${selected.length} AI-recommended question(s) to assessment.`);
+  const handleCustomizeAiQuestion = (suggestion: AIQuestionSuggestion) => {
+    setCustomBody(suggestion.body);
+    setCustomTopic(suggestion.topic || exam?.course_name || "Full Stack Development");
+    setCustomMarks(suggestion.marks);
+    setCustomDifficulty((suggestion.difficulty as 1 | 2 | 3) || 2);
+    setCustomExplanation(suggestion.explanation || "");
+    setCustomOptionA(suggestion.options[0]?.text || "");
+    setCustomOptionB(suggestion.options[1]?.text || "");
+    setCustomOptionC(suggestion.options[2]?.text || "");
+    setCustomOptionD(suggestion.options[3]?.text || "");
+    const correctOpt = suggestion.options.find((o) => o.is_correct);
+    setCustomCorrectKey((correctOpt?.key as "A" | "B" | "C" | "D") || "A");
+    setEditingQuestionId(null);
+    setCustomQuestionModalOpen(true);
+    showToast("Loaded AI question into custom editor.");
+  };
+
+  // In-Modal AI Actions for Custom Question Modal
+  const handleAiAutoCompleteOptions = () => {
+    if (!customBody.trim()) {
+      showToast("Type a question stem first so the AI agent can synthesize options.");
+      return;
+    }
+    const generated = generateOptionsForStem(customBody, customTopic || exam?.course_name);
+    setCustomOptionA(generated.options[0]?.text || "");
+    setCustomOptionB(generated.options[1]?.text || "");
+    setCustomOptionC(generated.options[2]?.text || "");
+    setCustomOptionD(generated.options[3]?.text || "");
+    setCustomCorrectKey("A");
+    setCustomExplanation(generated.explanation);
+    setCustomMarks(generated.marks);
+    setCustomDifficulty(generated.difficulty as 1 | 2 | 3);
+    showToast("AI Agent generated 4 options with distractor misconceptions!");
+  };
+
+  const handleAiSuggestForCustomTopic = () => {
+    const topicToUse = customTopic.trim() || exam?.course_name || "Full Stack Architecture";
+    const sug = generateSingleQuestion(topicToUse, customDifficulty);
+    setCustomBody(sug.body);
+    setCustomTopic(sug.topic);
+    setCustomMarks(sug.marks);
+    setCustomDifficulty(sug.difficulty as 1 | 2 | 3);
+    setCustomExplanation(sug.explanation);
+    setCustomOptionA(sug.options[0]?.text || "");
+    setCustomOptionB(sug.options[1]?.text || "");
+    setCustomOptionC(sug.options[2]?.text || "");
+    setCustomOptionD(sug.options[3]?.text || "");
+    const correctOpt = sug.options.find((o) => o.is_correct);
+    setCustomCorrectKey((correctOpt?.key as "A" | "B" | "C" | "D") || "A");
+    showToast(`AI Agent drafted question on "${topicToUse}".`);
   };
 
   // Questions Actions: Excel Upload
@@ -645,6 +954,84 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const completedCount = assignments.filter((a) => a.status === "Completed").length;
   const inProgressCount = assignments.filter((a) => a.status === "In progress").length;
 
+  const formatInvitationTime = (iso?: string | null) => {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
+  };
+
+  const renderInvitationBadge = (status?: string | null) => {
+    const st = status || "Not Sent";
+    switch (st) {
+      case "Accepted":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+            <CheckCircle2 className="size-3" />
+            Accepted
+          </span>
+        );
+      case "Delivered":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700 border border-cyan-200">
+            <Check className="size-3" />
+            Delivered
+          </span>
+        );
+      case "Sent":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 border border-indigo-200">
+            <Send className="size-3" />
+            Sent
+          </span>
+        );
+      case "Sending":
+      case "Pending":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 border border-amber-200">
+            <RefreshCw className="size-3 animate-spin" />
+            {st}
+          </span>
+        );
+      case "Failed":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 border border-rose-200">
+            <AlertCircle className="size-3" />
+            Failed
+          </span>
+        );
+      case "Expired":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700 border border-orange-200">
+            <Clock className="size-3" />
+            Expired
+          </span>
+        );
+      case "Revoked":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-600 border border-stone-200">
+            <Ban className="size-3" />
+            Revoked
+          </span>
+        );
+      case "Not Sent":
+      default:
+        return (
+          <span className="inline-flex items-center rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-muted border border-border">
+            Not Sent
+          </span>
+        );
+    }
+  };
+
   return (
     <div className={`space-y-6 ${fullScreen ? "fixed inset-0 z-50 overflow-y-auto bg-bg p-6" : ""}`}>
       {/* Toast Notification Banner */}
@@ -747,11 +1134,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key as WorkspaceTab)}
-            className={`border-b-2 px-3.5 py-2 text-xs font-semibold transition-colors ${
-              activeTab === tab.key
-                ? "border-primary-600 text-primary-700 font-bold"
-                : "border-transparent text-muted hover:text-text hover:bg-surface-muted/50 rounded-t-lg"
-            }`}
+            className={`border-b-2 px-3.5 py-2 text-xs font-semibold transition-colors ${activeTab === tab.key
+              ? "border-primary-600 text-primary-700 font-bold"
+              : "border-transparent text-muted hover:text-text hover:bg-surface-muted/50 rounded-t-lg"
+              }`}
           >
             {tab.label}
           </button>
@@ -763,21 +1149,18 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         <div className="space-y-6 animate-in fade-in">
           {/* Draft Notification & Publish Prompt Banner */}
           {assessmentStatus === "draft" && (
-            <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between rounded-xl border p-4 gap-3 shadow-2xs ${
-              questions.length === 0
-                ? "border-amber-200 bg-amber-50/50"
-                : "border-primary-200 bg-primary-50/50"
-            }`}>
+            <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between rounded-xl border p-4 gap-3 shadow-2xs ${questions.length === 0
+              ? "border-amber-200 bg-amber-50/50"
+              : "border-primary-200 bg-primary-50/50"
+              }`}>
               <div className="space-y-1">
-                <div className={`flex items-center gap-2 text-xs font-bold ${
-                  questions.length === 0 ? "text-amber-900" : "text-primary-900"
-                }`}>
+                <div className={`flex items-center gap-2 text-xs font-bold ${questions.length === 0 ? "text-amber-900" : "text-primary-900"
+                  }`}>
                   <Send className="size-4 text-primary-700" />
                   <span>Assessment is in Draft Status</span>
                 </div>
-                <p className={`text-xs ${
-                  questions.length === 0 ? "text-amber-800" : "text-primary-800"
-                }`}>
+                <p className={`text-xs ${questions.length === 0 ? "text-amber-800" : "text-primary-800"
+                  }`}>
                   {questions.length === 0 ? (
                     <>⚠️ You have not assigned any questions yet. Add questions via the <strong>Questions</strong> tab (custom, AI, or Excel) before publishing.</>
                   ) : (
@@ -951,13 +1334,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   </Button>
 
                   <Button
-                    variant="secondary"
+                    variant={showAiCopilot ? "primary" : "secondary"}
                     size="sm"
-                    onClick={handleOpenAiModal}
-                    className="gap-1.5 text-xs font-semibold text-ai-700 shadow-2xs hover:bg-ai-50"
+                    onClick={() => setShowAiCopilot(!showAiCopilot)}
+                    className={`gap-1.5 text-xs font-semibold shadow-2xs ${showAiCopilot
+                      ? "bg-ai-600 text-white hover:bg-ai-700"
+                      : "text-ai-700 hover:bg-ai-50"
+                      }`}
                   >
-                    <Sparkles className="size-3.5 text-ai-600" />
-                    <span>AI Recommend</span>
+                    <Bot className="size-3.5" />
+                    <span>AI Copilot Agent</span>
                   </Button>
 
                   <Button
@@ -972,6 +1358,233 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               )}
             </div>
           </div>
+
+          {/* AI Question Copilot Agent Panel */}
+          {showAiCopilot && (
+            <div className="rounded-2xl border border-ai-200/80 bg-linear-to-br from-ai-50/50 via-surface to-primary-50/30 p-5 shadow-2xs space-y-4 transition-all">
+              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center border-b border-border/60 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-9 items-center justify-center rounded-xl bg-ai-600 text-white shadow-xs">
+                    <Bot className="size-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-text">AI Question Recommender Agent</h4>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-ai-100 px-2 py-0.5 text-[10px] font-semibold text-ai-700">
+                        <span className="size-1.5 rounded-full bg-ai-500 animate-pulse" />
+                        Online Copilot
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted">
+                      Synthesize syllabus-aligned MCQs, verified single answers, and candidate distractor misconceptions.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted font-medium hidden md:inline">{copilotStatusText}</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAiCopilot(false)}
+                    className="rounded-lg p-1 text-muted hover:text-text hover:bg-surface"
+                    title="Collapse AI Copilot"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Input & Parameters Controls */}
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_auto_auto_auto]">
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 size-4 text-muted" />
+                  <input
+                    type="text"
+                    value={copilotTopic}
+                    onChange={(e) => setCopilotTopic(e.target.value)}
+                    placeholder="Enter topic or concept, e.g. React Server Components, SQL B-Tree Indexing, Concurrency..."
+                    className="h-9 w-full rounded-xl border border-border bg-surface pl-9 pr-3 text-xs text-text shadow-2xs placeholder:text-muted focus:border-ai-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <select
+                  value={copilotDifficulty}
+                  onChange={(e) => setCopilotDifficulty(+e.target.value as 0 | 1 | 2 | 3)}
+                  className="h-9 rounded-xl border border-border bg-surface px-3 text-xs font-medium text-text shadow-2xs focus:border-ai-500 focus:outline-hidden"
+                >
+                  <option value={0}>All Difficulties</option>
+                  <option value={1}>Easy (Recall)</option>
+                  <option value={2}>Medium (Applied)</option>
+                  <option value={3}>Hard (Analysis)</option>
+                </select>
+
+                <select
+                  value={copilotCount}
+                  onChange={(e) => setCopilotCount(+e.target.value)}
+                  className="h-9 rounded-xl border border-border bg-surface px-3 text-xs font-medium text-text shadow-2xs focus:border-ai-500 focus:outline-hidden"
+                >
+                  <option value={1}>1 Question</option>
+                  <option value={3}>3 Questions</option>
+                  <option value={5}>5 Questions</option>
+                </select>
+
+                <Button
+                  onClick={() => handleRunAiCopilot()}
+                  disabled={isCopilotGenerating}
+                  className="gap-1.5 bg-ai-600 font-semibold text-white shadow-xs hover:bg-ai-700 text-xs h-9 px-4"
+                >
+                  {isCopilotGenerating ? (
+                    <>
+                      <RefreshCw className="size-3.5 animate-spin" />
+                      <span>Synthesizing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="size-3.5" />
+                      <span>Recommend</span>
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              {/* Quick Topic Chips */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-medium text-muted">Suggested Topics:</span>
+                {[
+                  "System Architecture",
+                  "API Design & Auth",
+                  "Database Indexing",
+                  "Concurrency & Locks",
+                  "Performance Profiling",
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => {
+                      setCopilotTopic(chip);
+                      handleRunAiCopilot(chip);
+                    }}
+                    className="rounded-lg border border-border/80 bg-surface/80 px-2.5 py-1 text-[11px] font-medium text-muted shadow-2xs hover:border-ai-400 hover:bg-ai-50/80 hover:text-ai-800 transition-colors"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              {/* Copilot Suggestions Cards */}
+              {copilotSuggestions.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-text">
+                      Agent Recommended Questions ({copilotSuggestions.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCopilotSuggestions([])}
+                      className="text-[11px] font-medium text-muted hover:text-text"
+                    >
+                      Clear suggestions
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {copilotSuggestions.map((sug) => (
+                      <div
+                        key={sug.id}
+                        className="flex flex-col justify-between rounded-xl border border-ai-200 bg-surface p-4 shadow-2xs hover:border-ai-400 transition-all space-y-3"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="rounded-md bg-ai-50 px-2 py-0.5 text-[10px] font-bold text-ai-700 uppercase tracking-wider">
+                              {sug.topic}
+                            </span>
+                            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-muted">
+                              <span
+                                className={`rounded px-1.5 py-0.2 text-[10px] font-bold ${sug.difficulty === 1
+                                  ? "bg-success-50 text-success-700"
+                                  : sug.difficulty === 2
+                                    ? "bg-warning-50 text-warning-800"
+                                    : "bg-error-50 text-error-700"
+                                  }`}
+                              >
+                                {sug.difficulty === 1 ? "Easy" : sug.difficulty === 2 ? "Medium" : "Hard"}
+                              </span>
+                              <span>· {sug.marks} marks</span>
+                            </div>
+                          </div>
+
+                          <p className="text-xs font-semibold text-text leading-snug">{sug.body}</p>
+
+                          {/* Options Preview */}
+                          <div className="space-y-1.5 pt-1">
+                            {sug.options.map((opt) => (
+                              <div
+                                key={opt.key}
+                                className={`flex items-start gap-2 rounded-lg p-1.5 text-[11px] ${opt.is_correct
+                                  ? "bg-success-50 border border-success-200 font-medium text-success-900"
+                                  : "text-muted border border-transparent"
+                                  }`}
+                              >
+                                <span
+                                  className={`font-mono font-bold ${opt.is_correct ? "text-success-700" : "text-muted"
+                                    }`}
+                                >
+                                  {opt.key}.
+                                </span>
+                                <span className="flex-1">{opt.text}</span>
+                                {opt.is_correct && (
+                                  <span className="shrink-0 text-[10px] font-bold text-success-700 uppercase">
+                                    Correct Key
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Pedagogical Explanation */}
+                          {sug.explanation && (
+                            <div className="rounded-lg bg-surface-muted/60 p-2 text-[10px] text-muted italic">
+                              <span className="font-semibold text-text not-italic">Pedagogical note: </span>
+                              {sug.explanation}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Card Actions */}
+                        <div className="flex items-center justify-end gap-2 border-t border-border pt-2.5">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleCustomizeAiQuestion(sug)}
+                            className="gap-1 text-[11px] h-7"
+                          >
+                            <Pencil className="size-3" />
+                            <span>Edit in Form</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => handleQuickAddAiQuestion(sug)}
+                            className="gap-1 bg-ai-600 font-semibold text-white hover:bg-ai-700 text-[11px] h-7"
+                          >
+                            <Plus className="size-3.5" />
+                            <span>Add to Assessment</span>
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-ai-200/60 bg-surface/50 p-4 text-center">
+                  <p className="text-xs text-muted">
+                    Click &ldquo;Recommend&rdquo; or select a topic above to let the AI Agent suggest questions for this assessment.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Questions List */}
           {questions.length === 0 ? (
@@ -988,21 +1601,18 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
               {/* 3 Action Cards */}
               <div className="grid gap-4 sm:grid-cols-3 max-w-2xl mx-auto text-left">
-                {/* 1. Generate with AI */}
+                {/* 1. Add Question with AI */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setAiTopicInput(settingsCourse || "Full Stack Development");
-                    setAiModalOpen(true);
-                  }}
+                  onClick={handleOpenAddCustomQuestion}
                   className="rounded-xl border border-ai-200 bg-ai-50/40 p-4 transition-all hover:border-ai-400 hover:shadow-xs group cursor-pointer"
                 >
                   <div className="flex size-9 items-center justify-center rounded-lg bg-ai-100 text-ai-700 mb-2.5 group-hover:scale-105 transition-transform">
                     <Sparkles className="size-4.5" />
                   </div>
-                  <div className="font-bold text-xs text-ai-950">Generate with AI</div>
+                  <div className="font-bold text-xs text-ai-950">Add Question with AI</div>
                   <p className="text-[11px] text-ai-800 leading-tight mt-1">
-                    Instant MCQ suggestions based on curriculum track.
+                    AI recommendation and manual question creation.
                   </p>
                 </button>
 
@@ -1095,11 +1705,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       {q.options.map((opt) => (
                         <div
                           key={opt.id}
-                          className={`flex items-center justify-between rounded-lg border px-3 py-1.5 text-xs ${
-                            opt.is_correct
-                              ? "border-success-400 bg-success-50 text-success-900 font-semibold"
-                              : "border-border bg-surface-muted/40 text-muted"
-                          }`}
+                          className={`flex items-center justify-between rounded-lg border px-3 py-1.5 text-xs ${opt.is_correct
+                            ? "border-success-400 bg-success-50 text-success-900 font-semibold"
+                            : "border-border bg-surface-muted/40 text-muted"
+                            }`}
                         >
                           <div className="flex items-center gap-2">
                             <span className="font-mono font-bold">{opt.key}.</span>
@@ -1129,48 +1738,72 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       {/* TAB 3: CANDIDATES & TELEMETRY (CONSOLIDATED CANDIDATE ROSTER, REALTIME TELEMETRY & EXCEL IMPORT) */}
       {activeTab === "candidates" && (
         <div className="space-y-5 animate-in fade-in">
-          {/* Top Live Telemetry Counters Row */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs">
+          {/* Top Assessment Invitation & Telemetry Status Counters Row */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
               <div className="flex items-center justify-between text-xs text-muted">
-                <span>In Progress</span>
-                <span className="size-2 rounded-full bg-success-500 animate-pulse" />
+                <span>Enrolled</span>
+                <Users className="size-3.5 text-primary-600" />
               </div>
               <div className="mt-2 text-2xl font-bold text-text">
-                {assignments.filter((a) => a.status === "In progress").length || 21}
+                {invitationStats.totalEnrolled}
               </div>
-              <div className="text-[11px] font-semibold text-primary-700">Active Live Streams</div>
+              <div className="text-[11px] font-semibold text-primary-700">Total Candidates</div>
             </div>
 
-            <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs">
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
               <div className="flex items-center justify-between text-xs text-muted">
-                <span>Not Started</span>
-                <span className="size-2 rounded-full bg-muted" />
+                <span>Invitations Sent</span>
+                <Send className="size-3.5 text-indigo-600" />
               </div>
               <div className="mt-2 text-2xl font-bold text-text">
-                {assignments.filter((a) => a.status === "Not started").length || 6}
+                {invitationStats.totalSent}
               </div>
-              <div className="text-[11px] font-medium text-muted">Links Dispatched</div>
+              <div className="text-[11px] font-medium text-indigo-700">Dispatched via Agent</div>
             </div>
 
-            <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs">
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
               <div className="flex items-center justify-between text-xs text-muted">
-                <span>Completed</span>
-                <CheckCircle2 className="size-3.5 text-success-600" />
+                <span>Delivered</span>
+                <Check className="size-3.5 text-cyan-600" />
               </div>
               <div className="mt-2 text-2xl font-bold text-text">
-                {assignments.filter((a) => a.status === "Completed").length || 5}
+                {invitationStats.delivered}
               </div>
-              <div className="text-[11px] font-semibold text-success-700">Evaluated & Ready</div>
+              <div className="text-[11px] font-semibold text-cyan-700">Confirmed Reached</div>
             </div>
 
-            <div className="rounded-xl border border-border bg-surface p-4 shadow-2xs">
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
               <div className="flex items-center justify-between text-xs text-muted">
-                <span>Integrity Standard</span>
-                <ShieldCheck className="size-3.5 text-primary-600" />
+                <span>Accepted</span>
+                <CheckCircle2 className="size-3.5 text-emerald-600" />
               </div>
-              <div className="mt-2 text-base font-bold text-text">Max 3 Flags</div>
-              <div className="text-[11px] text-muted">Capped · Non-punitive</div>
+              <div className="mt-2 text-2xl font-bold text-text">
+                {invitationStats.accepted}
+              </div>
+              <div className="text-[11px] font-semibold text-emerald-700">Links Redeemed</div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between text-xs text-muted">
+                <span>Failed</span>
+                <AlertCircle className="size-3.5 text-rose-600" />
+              </div>
+              <div className="mt-2 text-2xl font-bold text-text">
+                {invitationStats.failed}
+              </div>
+              <div className="text-[11px] font-semibold text-rose-700">Delivery Errors</div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between text-xs text-muted">
+                <span>Pending</span>
+                <Clock className="size-3.5 text-amber-600" />
+              </div>
+              <div className="mt-2 text-2xl font-bold text-text">
+                {invitationStats.pending}
+              </div>
+              <div className="text-[11px] font-medium text-muted">Awaiting Dispatch</div>
             </div>
           </div>
 
@@ -1180,22 +1813,20 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               <button
                 type="button"
                 onClick={() => setCandidateSubView("roster")}
-                className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                  candidateSubView === "roster"
-                    ? "bg-primary-50 text-primary-700 shadow-2xs font-bold"
-                    : "text-muted hover:bg-surface-muted hover:text-text"
-                }`}
+                className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${candidateSubView === "roster"
+                  ? "bg-primary-50 text-primary-700 shadow-2xs font-bold"
+                  : "text-muted hover:bg-surface-muted hover:text-text"
+                  }`}
               >
                 Candidate Roster ({assignments.length})
               </button>
               <button
                 type="button"
                 onClick={() => setCandidateSubView("telemetry")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                  candidateSubView === "telemetry"
-                    ? "bg-primary-50 text-primary-700 shadow-2xs font-bold"
-                    : "text-muted hover:bg-surface-muted hover:text-text"
-                }`}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${candidateSubView === "telemetry"
+                  ? "bg-primary-50 text-primary-700 shadow-2xs font-bold"
+                  : "text-muted hover:bg-surface-muted hover:text-text"
+                  }`}
               >
                 <Radio className="size-3.5 text-danger-500 animate-pulse" />
                 <span>Realtime Telemetry ({filteredLiveCandidates.length} Active Streams)</span>
@@ -1221,17 +1852,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     </Button>
 
                     <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => sendLinksMutation.mutate()}
-                      disabled={sendLinksMutation.isPending || assignments.length === 0}
-                      className="gap-1.5 text-xs shadow-2xs"
-                    >
-                      <Send className="size-3.5 text-primary-600" />
-                      <span>{sendLinksMutation.isPending ? "Sending..." : "Dispatch Links"}</span>
-                    </Button>
-
-                    <Button
                       size="sm"
                       onClick={() => setAddStudentModalOpen(true)}
                       className="flex items-center gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
@@ -1248,32 +1868,142 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           {/* SUB-VIEW 1: CANDIDATE ROSTER */}
           {candidateSubView === "roster" && (
             <div className="space-y-4">
+              {/* LangGraph Assessment Invitation Agent & YOPmail Testing Banner */}
+              <div className="rounded-xl border border-primary-200 bg-primary-50/40 p-3.5 space-y-2.5 shadow-2xs">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-600 text-white shadow-2xs">
+                      <Mail className="size-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-text">LangGraph Assessment Invitation Agent</span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          yopmailTestMode ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {yopmailTestMode ? "YOPmail Test Mode Active" : "Production Delivery Mode"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted">
+                        {yopmailTestMode
+                          ? `In test mode, invitations route safely to ${yopmailTestRecipient}. Candidate identities and assignments are preserved.`
+                          : "Invitations dispatch directly to each enrolled candidate's registered email address."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-xs text-text cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={yopmailTestMode}
+                        onChange={(e) => setYopmailTestMode(e.target.checked)}
+                        className="rounded border-border text-primary-600 focus:ring-primary-500 size-3.5"
+                      />
+                      <span className="font-semibold">Test Mode</span>
+                    </label>
+
+                    {yopmailTestMode && (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="email"
+                          value={yopmailTestRecipient}
+                          onChange={(e) => setYopmailTestRecipient(e.target.value)}
+                          placeholder="test-inbox@yopmail.com"
+                          className="h-8 w-52 rounded-lg border border-border bg-white px-2.5 text-xs text-text shadow-2xs focus:border-primary-500"
+                          title="Override recipient inbox for testing invitations"
+                        />
+                        <a
+                          href={`https://yopmail.com?login=${(yopmailTestRecipient.split("@")[0] || "eduproctor-test").trim()}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2.5 py-1.5 text-[11px] font-semibold text-text hover:bg-surface-muted shadow-2xs transition-colors"
+                          title="Open YOPmail inbox in new tab"
+                        >
+                          <span>Open YOPmail</span>
+                          <ExternalLink className="size-3 text-muted" />
+                        </a>
+                      </div>
+                    )}
+
+                    {!isLocationAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => sendLinksMutation.mutate({ forceResend: false })}
+                          disabled={sendLinksMutation.isPending || assignments.length === 0}
+                          className="gap-1.5 text-xs bg-primary-600 text-white hover:bg-primary-700 shadow-2xs h-8"
+                          title="Run LangGraph Agent to dispatch invitations to eligible candidates"
+                        >
+                          {sendLinksMutation.isPending ? (
+                            <RefreshCw className="size-3.5 animate-spin" />
+                          ) : (
+                            <Send className="size-3.5" />
+                          )}
+                          <span>{sendLinksMutation.isPending ? "Agent Running..." : "Send Invitations"}</span>
+                        </Button>
+
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => sendLinksMutation.mutate({ forceResend: true })}
+                          disabled={sendLinksMutation.isPending || assignments.length === 0}
+                          className="gap-1 text-xs shadow-2xs h-8"
+                          title="Force re-dispatch invitation emails to all enrolled candidates"
+                        >
+                          <RefreshCw className="size-3 text-muted" />
+                          <span>Resend All</span>
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Search and Status Filters */}
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                 <div className="relative w-full sm:w-72">
                   <Search className="absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
                   <input
                     type="text"
-                    placeholder="Search by name, email, or mobile..."
+                    placeholder="Search candidate, email, mobile, or status..."
                     value={candidateSearch}
                     onChange={(e) => setCandidateSearch(e.target.value)}
                     className="h-9 w-full rounded-lg border border-border bg-surface-muted pl-9 pr-3 text-xs text-text placeholder:text-muted focus:border-primary-500 focus:bg-surface focus:outline-hidden"
                   />
                 </div>
 
-                <select
-                  value={candidateStatusFilter}
-                  onChange={(e) => setCandidateStatusFilter(e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-surface-muted px-2.5 text-xs text-text focus:border-primary-500 focus:outline-hidden"
-                >
-                  <option value="all">All statuses</option>
-                  <option value="completed">Completed</option>
-                  <option value="in progress">In progress</option>
-                  <option value="not started">Not started</option>
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={invitationStatusFilter}
+                    onChange={(e) => setInvitationStatusFilter(e.target.value)}
+                    className="h-9 rounded-lg border border-border bg-surface-muted px-2.5 text-xs text-text focus:border-primary-500 focus:outline-hidden"
+                  >
+                    <option value="all">All Invitation Statuses</option>
+                    <option value="accepted">Accepted</option>
+                    <option value="delivered">Delivered</option>
+                    <option value="sent">Sent</option>
+                    <option value="pending">Pending</option>
+                    <option value="failed">Failed</option>
+                    <option value="expired">Expired</option>
+                    <option value="revoked">Revoked</option>
+                    <option value="not sent">Not Sent</option>
+                  </select>
+
+                  <select
+                    value={candidateStatusFilter}
+                    onChange={(e) => setCandidateStatusFilter(e.target.value)}
+                    className="h-9 rounded-lg border border-border bg-surface-muted px-2.5 text-xs text-text focus:border-primary-500 focus:outline-hidden"
+                  >
+                    <option value="all">All Exam Progress</option>
+                    <option value="completed">Completed</option>
+                    <option value="in progress">In progress</option>
+                    <option value="not started">Not started</option>
+                  </select>
+                </div>
               </div>
 
-              {/* Enrolled Candidates Table with Mobile Number */}
+              {/* Enrolled Candidates Table with Invitation Status & Actions */}
               <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-2xs">
                 {filteredAssignments.length === 0 ? (
                   <div className="p-8 text-center">
@@ -1291,12 +2021,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     <THead>
                       <tr>
                         <TH>Candidate</TH>
-                        <TH>Contact Mobile</TH>
-                        <TH>Status</TH>
-                        <TH>Score</TH>
-                        <TH>Red Flags</TH>
-                        <TH>Glances</TH>
-                        <TH>Link Status</TH>
+                        <TH>Registered Email</TH>
+                        <TH>Invitation Status</TH>
+                        <TH>Sent At</TH>
+                        <TH>Accepted At</TH>
+                        <TH>Exam Progress</TH>
                         <TH className="text-right">Actions</TH>
                       </tr>
                     </THead>
@@ -1320,98 +2049,132 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                 </div>
                                 <div>
                                   <div className="font-semibold text-xs text-text">{a.candidate_name}</div>
-                                  <div className="font-mono text-[11px] text-muted">{a.candidate_email}</div>
+                                  <div className="flex items-center gap-1 font-mono text-[11px] text-muted">
+                                    <Phone className="size-2.5 text-muted shrink-0" />
+                                    <span>{a.candidate_phone || "+91 98765 43210"}</span>
+                                  </div>
                                 </div>
                               </div>
                             </TD>
 
-                            {/* Mobile Number */}
+                            {/* Registered Email */}
                             <TD>
-                              <div className="flex items-center gap-1.5 text-xs font-mono text-text">
-                                <Phone className="size-3 text-muted shrink-0" />
-                                <span>{a.candidate_phone || "+91 98765 43210"}</span>
+                              <div className="space-y-0.5">
+                                <div className="font-mono text-xs text-text">{a.candidate_email}</div>
+                                {yopmailTestMode && (
+                                  <div className="text-[10px] text-primary-700 font-mono">
+                                    → Routed to: {yopmailTestRecipient}
+                                  </div>
+                                )}
                               </div>
                             </TD>
 
-                            {/* Status */}
+                            {/* Invitation Status */}
                             <TD>
-                              {isCompleted ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-success-50 px-2 py-0.5 text-xs font-semibold text-success-700">
-                                  <CheckCircle2 className="size-3" />
-                                  Completed
-                                </span>
-                              ) : isInProgress ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2 py-0.5 text-xs font-semibold text-primary-700">
-                                  <span className="size-1.5 rounded-full bg-primary-600 animate-pulse" />
-                                  In progress
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-muted">
-                                  Not started
-                                </span>
-                              )}
+                              <div className="space-y-0.5">
+                                <div>{renderInvitationBadge(a.invitation_status)}</div>
+                                {a.delivery_status && (
+                                  <div className="text-[10px] text-muted capitalize">
+                                    Provider: {a.delivery_status}
+                                  </div>
+                                )}
+                              </div>
                             </TD>
 
-                            {/* Score */}
+                            {/* Sent At */}
                             <TD>
-                              {isCompleted && a.score_pct != null ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-bold text-xs text-text">{a.score_pct}%</span>
-                                  <span className="text-[10px] text-muted">(Pass)</span>
-                                </div>
-                              ) : isInProgress ? (
-                                <span className="text-xs text-muted">In exam...</span>
+                              <span className="text-xs font-mono text-muted">
+                                {formatInvitationTime(a.link_sent_at)}
+                              </span>
+                            </TD>
+
+                            {/* Accepted At */}
+                            <TD>
+                              {a.link_used_at ? (
+                                <span className="text-xs font-mono text-emerald-700 font-semibold">
+                                  {formatInvitationTime(a.link_used_at)}
+                                </span>
                               ) : (
                                 <span className="text-xs text-muted">—</span>
                               )}
                             </TD>
 
-                            {/* Red Flags Capped at 3 */}
+                            {/* Exam Progress */}
                             <TD>
-                              {(a.flags ?? 0) > 0 ? (
-                                <Badge tone="warning" className="gap-1 font-medium">
-                                  <AlertTriangle className="size-3" />
-                                  {a.flags} / 3 Capped limit
-                                </Badge>
-                              ) : (
-                                <Badge tone="success" className="gap-1 font-medium">
-                                  <CheckCircle2 className="size-3" />
-                                  0 / 3 Flags
-                                </Badge>
-                              )}
-                            </TD>
+                              <div className="space-y-1">
+                                {isCompleted ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-success-50 px-2 py-0.5 text-[11px] font-semibold text-success-700">
+                                      <CheckCircle2 className="size-3" />
+                                      Done ({a.score_pct ?? 0}%)
+                                    </span>
+                                  </div>
+                                ) : isInProgress ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold text-primary-700">
+                                    <span className="size-1.5 rounded-full bg-primary-600 animate-pulse" />
+                                    In progress
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-muted">
+                                    Not started
+                                  </span>
+                                )}
 
-                            {/* Glances */}
-                            <TD>
-                              <span className="text-xs font-mono text-muted">{a.glances ?? 0} glances</span>
-                            </TD>
-
-                            {/* Link */}
-                            <TD>
-                              {a.link_used_at ? (
-                                <span className="inline-flex items-center gap-1 text-xs text-success-700 font-medium">
-                                  <CheckCircle2 className="size-3" /> Opened
-                                </span>
-                              ) : a.link_sent_at ? (
-                                <span className="inline-flex items-center gap-1 text-xs text-primary-700 font-medium">
-                                  <Mail className="size-3" /> Sent
-                                </span>
-                              ) : (
-                                <span className="text-xs text-muted">Not sent</span>
-                              )}
+                                {(a.flags ?? 0) > 0 && (
+                                  <div>
+                                    <Badge tone="warning" className="text-[10px] py-0">
+                                      {a.flags} flag{a.flags > 1 ? "s" : ""}
+                                    </Badge>
+                                  </div>
+                                )}
+                              </div>
                             </TD>
 
                             {/* Actions */}
                             <TD className="text-right">
                               <div className="flex items-center justify-end gap-1.5">
+                                {!isLocationAdmin && (
+                                  <>
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      disabled={resendInvitationMutation.isPending || a.invitation_status === "Accepted"}
+                                      onClick={() => resendInvitationMutation.mutate(a.candidate_id)}
+                                      className="h-7 px-2 gap-1 text-[11px] font-semibold"
+                                      title={
+                                        a.invitation_status === "Accepted"
+                                          ? "Candidate has already joined and verified"
+                                          : "Resend assessment invitation via LangGraph Agent"
+                                      }
+                                    >
+                                      <RefreshCw className="size-3 text-primary-600" />
+                                      <span>Resend</span>
+                                    </Button>
+
+                                    {a.link_sent_at && a.invitation_status !== "Accepted" && a.invitation_status !== "Revoked" && (
+                                      <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        disabled={revokeInvitationMutation.isPending}
+                                        onClick={() => revokeInvitationMutation.mutate(a.candidate_id)}
+                                        className="h-7 px-2 gap-1 text-[11px] font-semibold text-danger-700 hover:text-danger-800"
+                                        title="Revoke active single-use invitation link"
+                                      >
+                                        <Ban className="size-3" />
+                                        <span>Revoke</span>
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+
                                 {isCompleted && (
                                   <Button
                                     asChild
                                     size="sm"
-                                    className="gap-1 text-xs font-semibold bg-primary-600 text-white hover:bg-primary-700 h-8"
+                                    className="gap-1 text-[11px] font-semibold bg-primary-600 text-white hover:bg-primary-700 h-7 px-2"
                                   >
                                     <Link to={`/mentor/sessions/${a.session_id ?? "s1"}/result`}>
-                                      <span>View Result</span>
+                                      <span>Result</span>
                                     </Link>
                                   </Button>
                                 )}
@@ -1420,10 +2183,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                   asChild
                                   variant="secondary"
                                   size="sm"
-                                  className="gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-800 h-8"
+                                  className="gap-1 text-[11px] font-semibold text-primary-700 hover:text-primary-800 h-7 px-2"
                                 >
                                   <Link to={`/mentor/sessions/${a.session_id ?? "s1"}`}>
-                                    <Eye className="size-3.5" />
+                                    <Eye className="size-3" />
                                     <span>Timeline</span>
                                   </Link>
                                 </Button>
@@ -1520,13 +2283,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
                       <TD>
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            cand.status === "In progress"
-                              ? "bg-info-50 text-info-700"
-                              : cand.status === "Completed"
-                                ? "bg-success-50 text-success-700"
-                                : "bg-surface-muted text-muted"
-                          }`}
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${cand.status === "In progress"
+                            ? "bg-info-50 text-info-700"
+                            : cand.status === "Completed"
+                              ? "bg-success-50 text-success-700"
+                              : "bg-surface-muted text-muted"
+                            }`}
                         >
                           {cand.status}
                         </span>
@@ -1542,9 +2304,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                             {[1, 2, 3].map((dot) => (
                               <span
                                 key={dot}
-                                className={`size-2 rounded-full ${
-                                  dot <= cand.flags ? "bg-danger-500" : "bg-border-strong"
-                                }`}
+                                className={`size-2 rounded-full ${dot <= cand.flags ? "bg-danger-500" : "bg-border-strong"
+                                  }`}
                               />
                             ))}
                           </div>
@@ -1687,53 +2448,122 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
       )}
 
-      {/* MODAL 1: ADD / EDIT CUSTOM QUESTION */}
+      {/* MODAL 1: ADD / EDIT CUSTOM QUESTION WITH INTEGRATED AI RECOMMENDATION AGENT */}
       {customQuestionModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-text/40 p-4 backdrop-blur-2xs"
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-4 rounded-2xl border border-border bg-surface p-6 shadow-2xl animate-in fade-in zoom-in-95">
+          <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto space-y-5 rounded-2xl border border-border bg-surface p-6 shadow-2xl animate-in fade-in zoom-in-95">
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-text">
-                {editingQuestionId ? "Edit Assessment Question" : "Add Custom Question by Mentor"}
-              </h3>
+              <div>
+                <h3 className="text-base font-bold text-text flex items-center gap-2">
+                  <span>{editingQuestionId ? "Edit Assessment Question" : "Create Question for Assessment"}</span>
+                  <Badge tone="primary" className="text-[11px] font-medium">
+                    {customSubject}
+                  </Badge>
+                </h3>
+                <p className="text-xs text-muted mt-0.5">
+                  Select your topic and parameters. The AI Agent will recommend questions, or you can create one manually.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => setCustomQuestionModalOpen(false)}
-                className="rounded-lg p-1 text-muted hover:text-text"
+                className="rounded-lg p-1 text-muted hover:text-text hover:bg-surface-elevated transition-colors"
+                title="Close modal"
               >
                 <X className="size-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveCustomQuestion} className="space-y-4">
-              <div>
-                <Label htmlFor="q-body">Question Body</Label>
-                <textarea
-                  id="q-body"
-                  rows={3}
-                  value={customBody}
-                  onChange={(e) => setCustomBody(e.target.value)}
-                  placeholder="e.g. State and explain the Carnot theorem for maximum theoretical thermal efficiency..."
-                  className="w-full rounded-xl border border-border bg-surface p-3 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
-                  required
-                />
+            {/* 1. Required Specification Selectors */}
+            <div className="space-y-3 rounded-xl border border-border bg-surface-elevated/40 p-4">
+              <div className="text-xs font-bold text-text uppercase tracking-wider flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-primary-600" />
+                <span>1. Question Target & Parameters</span>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <Label htmlFor="q-topic">Topic / Subtopic</Label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
+                {/* 1. Subject */}
+                <div className="sm:col-span-2">
+                  <Label htmlFor="q-subject" className="text-[11px] font-semibold text-text">
+                    Subject
+                  </Label>
+                  <Input
+                    id="q-subject"
+                    value={customSubject}
+                    onChange={(e) => setCustomSubject(e.target.value)}
+                    placeholder="e.g. Full Stack Development"
+                    className="h-9 text-xs"
+                  />
+                </div>
+
+                {/* 2. Topic */}
+                <div className="sm:col-span-3">
+                  <Label htmlFor="q-topic" className="text-[11px] font-semibold text-text">
+                    Topic / Subtopic
+                  </Label>
                   <Input
                     id="q-topic"
                     value={customTopic}
                     onChange={(e) => setCustomTopic(e.target.value)}
-                    placeholder="e.g. Carnot Cycle"
+                    placeholder="e.g. Full Stack Architecture"
+                    className="h-9 text-xs"
                   />
                 </div>
+              </div>
+
+              {/* Quick Topic Chips */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] text-muted font-medium mr-1">Quick Topics:</span>
+                {[
+                  "Full Stack Architecture",
+                  "Concurrency & Locks",
+                  "Data Fetching & SSR",
+                  "React Hooks & State",
+                  "API Architecture & Security",
+                  "SQL Analytics & Indexing",
+                ].map((topicChip) => (
+                  <button
+                    key={topicChip}
+                    type="button"
+                    onClick={() => setCustomTopic(topicChip)}
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${customTopic.toLowerCase() === topicChip.toLowerCase()
+                      ? "bg-primary-600 text-white shadow-2xs"
+                      : "bg-surface border border-border text-text hover:bg-surface-elevated"
+                      }`}
+                  >
+                    {topicChip}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 pt-1">
+                {/* 3. Difficulty */}
                 <div>
-                  <Label htmlFor="q-marks">Marks</Label>
+                  <Label htmlFor="q-diff" className="text-[11px] font-semibold text-text">
+                    Difficulty
+                  </Label>
+                  <select
+                    id="q-diff"
+                    value={customDifficulty}
+                    onChange={(e) => setCustomDifficulty(+e.target.value as 1 | 2 | 3)}
+                    className="h-9 w-full rounded-xl border border-border bg-surface px-2.5 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
+                  >
+                    <option value={1}>Easy (1/3)</option>
+                    <option value={2}>Medium (2/3)</option>
+                    <option value={3}>Hard (3/3)</option>
+                  </select>
+                </div>
+
+                {/* 4. Marks */}
+                <div>
+                  <Label htmlFor="q-marks" className="text-[11px] font-semibold text-text">
+                    Marks
+                  </Label>
                   <Input
                     id="q-marks"
                     type="number"
@@ -1741,26 +2571,212 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     max={10}
                     value={customMarks}
                     onChange={(e) => setCustomMarks(+e.target.value)}
+                    className="h-9 text-xs"
                   />
                 </div>
+
+                {/* 5. Question Type */}
                 <div>
-                  <Label htmlFor="q-diff">Difficulty</Label>
+                  <Label htmlFor="q-type" className="text-[11px] font-semibold text-text">
+                    Question Type
+                  </Label>
                   <select
-                    id="q-diff"
-                    value={customDifficulty}
-                    onChange={(e) => setCustomDifficulty(+e.target.value as 1 | 2 | 3)}
-                    className="h-10 w-full rounded-xl border border-border bg-surface px-3 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
+                    id="q-type"
+                    value={customQuestionType}
+                    onChange={(e) => setCustomQuestionType(e.target.value as "mcq")}
+                    className="h-9 w-full rounded-xl border border-border bg-surface px-2.5 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
                   >
-                    <option value={1}>Easy</option>
-                    <option value={2}>Medium</option>
-                    <option value={3}>Hard</option>
+                    <option value="mcq">MCQ (Multiple Choice)</option>
                   </select>
                 </div>
+              </div>
+            </div>
+
+            {/* 2. AI Question Recommendation Agent Section */}
+            {!editingQuestionId && (
+              <div className="space-y-3 rounded-xl border border-ai-200 bg-ai-50/40 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ai-200/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="flex size-6 items-center justify-center rounded-lg bg-ai-600 text-white shadow-2xs">
+                      <Bot className="size-3.5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-ai-900 flex items-center gap-1.5">
+                        <span>AI Recommended Questions</span>
+                        <span className="font-normal text-[11px] text-ai-700">
+                          (Topic: <strong>{customTopic}</strong>)
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-ai-600">
+                        {isInModalAiLoading
+                          ? "Agent analyzing syllabus & generating non-repeating recommendations..."
+                          : inModalAiRecs.length > 0
+                            ? `${inModalAiRecs.length} academically verified recommendations ready. Review and click "Use Question" to populate.`
+                            : "Enter a topic above to generate tailored question recommendations."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {isInModalAiLoading && (
+                      <span className="text-[11px] text-ai-700 flex items-center gap-1 font-medium pr-1">
+                        <RefreshCw className="size-3 animate-spin text-ai-600" />
+                        Generating...
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      disabled={isInModalAiLoading || !customTopic.trim()}
+                      onClick={handleManualTriggerRecommendations}
+                      className="inline-flex items-center gap-1 rounded-lg border border-ai-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-ai-700 shadow-2xs hover:bg-ai-100 disabled:opacity-50 transition-colors"
+                      title="Generate a fresh set of 3 questions"
+                    >
+                      <RefreshCw className="size-3" />
+                      <span>Regenerate All</span>
+                    </button>
+                  </div>
+                </div>
+
+                {inModalAiError && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+                    {inModalAiError}
+                  </div>
+                )}
+
+                {/* Recommendation Cards */}
+                {inModalAiRecs.length > 0 && (
+                  <div className="space-y-3 pt-1">
+                    {inModalAiRecs.map((rec, idx) => (
+                      <div
+                        key={rec.id}
+                        className="rounded-xl border border-ai-200 bg-white p-3.5 shadow-2xs transition-all hover:border-ai-400 hover:shadow-xs space-y-2.5"
+                      >
+                        {/* Card Header */}
+                        <div className="flex items-center justify-between border-b border-ai-100 pb-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-ai-100 px-2 py-0.5 font-mono text-[11px] font-bold text-ai-800">
+                              Q{idx + 1} · {rec.id.slice(0, 12)}
+                            </span>
+                            <Badge
+                              tone={rec.difficulty === 1 ? "success" : rec.difficulty === 2 ? "warning" : "error"}
+                              className="text-[10px] font-medium"
+                            >
+                              {difficultyLabel[rec.difficulty]}
+                            </Badge>
+                            <span className="text-[11px] font-semibold text-muted">
+                              {rec.marks} Mark{rec.marks > 1 ? "s" : ""}
+                            </span>
+                            <span className="rounded-md bg-surface-elevated border border-border px-1.5 py-0.5 text-[10px] font-medium text-text">
+                              {rec.topic}
+                            </span>
+                          </div>
+
+                          {/* Card Actions */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleUseAiRecommendation(rec)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-primary-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-2xs hover:bg-primary-700 transition-colors"
+                              title="Populate form with this question"
+                            >
+                              <Check className="size-3" />
+                              <span>Use Question</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isInModalAiLoading}
+                              onClick={() => handleRegenerateSingleRecommendation(idx)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:bg-surface-elevated transition-colors"
+                              title="Regenerate this specific question with another non-repeating option"
+                            >
+                              <RefreshCw className="size-3 text-muted" />
+                              <span>Regenerate</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSkipRecommendation(rec.id)}
+                              className="inline-flex items-center gap-0.5 rounded-lg p-1 text-muted hover:text-text hover:bg-surface-elevated transition-colors"
+                              title="Skip / Dismiss this recommendation"
+                            >
+                              <X className="size-3.5" />
+                              <span className="sr-only">Skip</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Question Statement */}
+                        <p className="text-xs font-semibold text-text leading-relaxed">
+                          {rec.body}
+                        </p>
+
+                        {/* Options A-D */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs">
+                          {rec.options.map((opt) => (
+                            <div
+                              key={opt.key}
+                              className={`flex items-start gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors ${opt.is_correct
+                                ? "border-success-400 bg-success-50/70 font-semibold text-success-900"
+                                : "border-border/60 bg-surface/50 text-text"
+                                }`}
+                            >
+                              <span className="font-mono font-bold text-muted">{opt.key}.</span>
+                              <span className="flex-1">{opt.text}</span>
+                              {opt.is_correct && (
+                                <span className="rounded bg-success-600 px-1 text-[9px] font-bold uppercase text-white">
+                                  Correct
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Concept Note */}
+                        {rec.explanation && (
+                          <div className="rounded-lg border border-ai-200/80 bg-ai-50/60 px-2.5 py-1.5 text-[11px] text-ai-800">
+                            <strong>Concept Note:</strong> {rec.explanation}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 3. Manual Question Editor & Approval (Mentor Form) */}
+            <form onSubmit={handleSaveCustomQuestion} className="space-y-4 pt-1" ref={manualEditorRef}>
+              <div className="border-t border-border pt-4">
+                <div className="text-xs font-bold text-text uppercase tracking-wider flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-2 rounded-full bg-emerald-600" />
+                    <span>2. Question Editor & Final Approval</span>
+                  </div>
+                  <span className="text-[11px] font-normal text-muted lowercase">
+                    (review or edit before saving to assessment)
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="q-body" className="text-xs font-semibold text-text">
+                  Question Body / Statement
+                </Label>
+                <textarea
+                  id="q-body"
+                  rows={3}
+                  value={customBody}
+                  onChange={(e) => setCustomBody(e.target.value)}
+                  placeholder="Enter the full question stem here, or click 'Use Question' on an AI recommendation above..."
+                  className="w-full rounded-xl border border-border bg-surface p-3 text-xs text-text shadow-2xs focus:border-primary-500 focus:outline-hidden"
+                  required
+                />
               </div>
 
               {/* 4 MCQ Options with radio selector */}
               <div className="space-y-2">
-                <Label>MCQ Options (Select the radio of the correct answer)</Label>
+                <Label className="text-xs font-semibold text-text">
+                  MCQ Options (Select the radio button of the correct answer)
+                </Label>
                 <div className="space-y-2">
                   {[
                     { key: "A" as const, val: customOptionA, set: setCustomOptionA },
@@ -1770,16 +2786,15 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   ].map((opt) => (
                     <div
                       key={opt.key}
-                      className={`flex items-center gap-2.5 rounded-xl border p-2 transition-colors ${
-                        customCorrectKey === opt.key ? "border-success-400 bg-success-50/50" : "border-border bg-surface"
-                      }`}
+                      className={`flex items-center gap-2.5 rounded-xl border p-2 transition-colors ${customCorrectKey === opt.key ? "border-success-400 bg-success-50/50" : "border-border bg-surface"
+                        }`}
                     >
                       <input
                         type="radio"
                         name="correct-opt"
                         checked={customCorrectKey === opt.key}
                         onChange={() => setCustomCorrectKey(opt.key)}
-                        className="size-4 accent-success-600"
+                        className="size-4 accent-success-600 cursor-pointer"
                         title={`Mark Option ${opt.key} as correct`}
                       />
                       <span className="font-mono font-bold text-xs text-muted">{opt.key}.</span>
@@ -1792,7 +2807,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                         required
                       />
                       {customCorrectKey === opt.key && (
-                        <span className="text-[10px] font-semibold text-success-700 pr-2">Correct</span>
+                        <span className="text-[10px] font-semibold text-success-700 pr-2">Correct Answer</span>
                       )}
                     </div>
                   ))}
@@ -1800,192 +2815,38 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               </div>
 
               <div>
-                <Label htmlFor="q-exp">Pedagogical Concept Note (Optional explanation)</Label>
+                <Label htmlFor="q-exp" className="text-xs font-semibold text-text">
+                  Pedagogical Concept Note (Explanation for candidate feedback)
+                </Label>
                 <Input
                   id="q-exp"
                   value={customExplanation}
                   onChange={(e) => setCustomExplanation(e.target.value)}
-                  placeholder="e.g. Carnot efficiency is η = 1 - (TL/TH)..."
+                  placeholder="e.g. Server-Side Rendering (SSR) delivers pre-rendered HTML for fast FCP..."
+                  className="text-xs"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 border-t border-border pt-4">
-                <Button type="button" variant="secondary" onClick={() => setCustomQuestionModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" className="bg-primary-600 font-semibold text-white hover:bg-primary-700">
-                  {editingQuestionId ? "Update Question" : "Save Question"}
-                </Button>
+              <div className="flex items-center justify-between border-t border-border pt-4">
+                <span className="text-[11px] text-muted">
+                  Human-in-the-Loop: Questions are only added when you click Save.
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="secondary" onClick={() => setCustomQuestionModalOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" className="bg-primary-600 font-semibold text-white hover:bg-primary-700">
+                    {editingQuestionId ? "Update Question" : "Save Question to Assessment"}
+                  </Button>
+                </div>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL 2: AI AGENT QUESTION RECOMMENDATIONS */}
-      {aiModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-text/40 p-4 backdrop-blur-2xs"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto space-y-4 rounded-2xl border border-border bg-surface p-6 shadow-2xl animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex size-7 items-center justify-center rounded-lg bg-ai-100 text-ai-700">
-                  <Sparkles className="size-4" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-text">AI Agent Question Recommendations</h3>
-                  <p className="text-xs text-muted">Specify any syllabus topic to synthesize structured MCQs.</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAiModalOpen(false)}
-                className="rounded-lg p-1 text-muted hover:text-text"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
 
-            {/* Topic Input Bar */}
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-2.5 size-4 text-muted" />
-                <input
-                  type="text"
-                  value={aiTopicInput}
-                  onChange={(e) => setAiTopicInput(e.target.value)}
-                  placeholder="e.g. Entropy, First Law, Heat Exchangers, Carnot Engine..."
-                  className="h-10 w-full rounded-xl border border-border bg-surface pl-9 pr-3 text-xs text-text placeholder:text-muted focus:border-ai-500 focus:outline-hidden"
-                />
-              </div>
-              <Button
-                type="button"
-                onClick={handleGenerateAiQuestions}
-                disabled={isGeneratingAi || !aiTopicInput.trim()}
-                className="bg-ai-600 font-semibold text-white hover:bg-ai-700"
-              >
-                {isGeneratingAi ? "Synthesizing..." : "Generate MCQs"}
-              </Button>
-            </div>
-
-            {/* Quick Topic Chips */}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-[11px] text-muted">Popular topics:</span>
-              {["First Law", "Entropy & Second Law", "Heat Transfer", "Carnot Engine"].map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => {
-                    setAiTopicInput(t);
-                    setIsGeneratingAi(true);
-                    setTimeout(() => {
-                      const gen = generateAIQuestions(t, 3);
-                      setAiQuestions(gen);
-                      setSelectedAiIds(new Set(gen.map((g) => g.id)));
-                      setIsGeneratingAi(false);
-                    }, 400);
-                  }}
-                  className="rounded-md border border-border bg-surface-muted/60 px-2 py-0.5 text-[11px] text-muted hover:bg-ai-50 hover:text-ai-700"
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-
-            {/* Suggested Questions List */}
-            <div className="space-y-3 max-h-80 overflow-y-auto">
-              {aiQuestions.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted">
-                  Click &ldquo;Generate MCQs&rdquo; to prompt the AI agent with your topic.
-                </div>
-              ) : (
-                aiQuestions.map((sug) => {
-                  const isChecked = selectedAiIds.has(sug.id);
-                  return (
-                    <div
-                      key={sug.id}
-                      className={`rounded-xl border p-3.5 space-y-2 transition-all ${
-                        isChecked ? "border-ai-400 bg-ai-50/30" : "border-border bg-surface"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <label className="flex items-start gap-2.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => {
-                              setSelectedAiIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(sug.id)) next.delete(sug.id);
-                                else next.add(sug.id);
-                                return next;
-                              });
-                            }}
-                            className="mt-0.5 size-4 accent-ai-600 rounded"
-                          />
-                          <div>
-                            <div className="font-semibold text-xs text-text">{sug.body}</div>
-                            <div className="text-[11px] text-muted">
-                              {sug.topic} • {sug.marks} marks • {difficultyLabel[sug.difficulty]}
-                            </div>
-                          </div>
-                        </label>
-                      </div>
-
-                      <div className="grid gap-1.5 sm:grid-cols-2 pl-6">
-                        {sug.options.map((o) => (
-                          <div
-                            key={o.key}
-                            className={`rounded border px-2 py-1 text-[11px] flex items-center justify-between ${
-                              o.is_correct
-                                ? "border-success-400 bg-success-50 text-success-900 font-semibold"
-                                : "border-border bg-surface-muted/50 text-muted"
-                            }`}
-                          >
-                            <span>
-                              <strong className="font-mono">{o.key}.</strong> {o.text}
-                            </span>
-                            {o.is_correct && <span className="text-[10px] text-success-700">✓ Correct</span>}
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="pl-6 text-[11px] text-muted italic">
-                        Explanation: {sug.explanation}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div className="flex items-center justify-between border-t border-border pt-4">
-              <span className="text-xs text-muted">
-                {selectedAiIds.size} question(s) selected
-              </span>
-
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={() => setAiModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleAddAiQuestionsToAssessment}
-                  disabled={selectedAiIds.size === 0}
-                  className="bg-ai-600 font-semibold text-white hover:bg-ai-700"
-                >
-                  Add Selected to Assessment
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: EXCEL / CSV FILE UPLOAD */}
+      {/* MODAL 2: EXCEL / CSV FILE UPLOAD */}
       {excelModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-text/40 p-4 backdrop-blur-2xs"

@@ -83,6 +83,30 @@ def set_exam_questions(db: Session, exam: Exam, question_ids: list[uuid.UUID]) -
 
 
 def _assignment_out(a: ExamAssignment, c: User) -> AssignmentOut:
+    meta = a.accommodations or {}
+    now = utcnow()
+
+    expires_at = a.link_expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+
+    if a.link_used_at is not None:
+        status_val = "Accepted"
+    elif meta.get("revoked"):
+        status_val = "Revoked"
+    elif expires_at and expires_at <= now and a.link_sent_at is not None:
+        status_val = "Expired"
+    elif meta.get("invitation_status"):
+        status_val = meta["invitation_status"]
+    elif a.link_sent_at is not None:
+        status_val = "Sent"
+    else:
+        status_val = "Not Sent"
+
+    del_status = None
+    if isinstance(meta.get("delivery_metadata"), dict):
+        del_status = meta["delivery_metadata"].get("status")
+
     return AssignmentOut(
         id=a.id,
         candidate_id=c.id,
@@ -91,8 +115,11 @@ def _assignment_out(a: ExamAssignment, c: User) -> AssignmentOut:
         link_sent_at=a.link_sent_at,
         link_used_at=a.link_used_at,
         link_expires_at=a.link_expires_at,
-        accommodations=a.accommodations or {},
+        accommodations=meta,
+        invitation_status=status_val,
+        delivery_status=del_status,
     )
+
 
 
 def _assignments(db: Session, exam: Exam) -> list[AssignmentOut]:
@@ -252,26 +279,100 @@ def put_assignments(
 
 @router.post("/{exam_id}/send-links", response_model=list[AssignmentOut])
 def send_links(
-    exam_id: uuid.UUID, body: SendLinksIn, db: Session = Depends(get_db), mentor: User = Depends(mentor_or_admin)
+    exam_id: uuid.UUID,
+    body: SendLinksIn,
+    db: Session = Depends(get_db),
+    mentor: User = Depends(mentor_or_admin),
 ):
+    """Assessment Invitation & Notification Agent (LangGraph Workflow).
+
+    Dispatches personalized assessment invitation emails to all enrolled, eligible candidates
+    and tracks delivery statuses in the mentor workspace.
+    """
     exam = own_exam(db, mentor, exam_id)
     if not exam.questions:
         raise HTTPException(409, "Add questions before sending links")
-    q = (
-        select(ExamAssignment, User)
-        .join(User, User.id == ExamAssignment.candidate_id)
-        .where(ExamAssignment.exam_id == exam.id, ExamAssignment.link_used_at.is_(None))
+
+    from app.agent.invitation_agent import run_invitation_agent
+
+    if exam.status == ExamStatus.draft:
+        exam.status = ExamStatus.scheduled
+        db.commit()
+
+    cand_filter = [str(cid) for cid in body.candidate_ids] if body.candidate_ids else None
+    result = run_invitation_agent(
+        db=db,
+        exam_id=exam.id,
+        mentor=mentor,
+        force_resend=body.force_resend,
+        candidate_filter_ids=cand_filter,
+        test_mode=body.test_mode or False,
+        test_recipient_override=body.test_recipient,
     )
-    if body.candidate_ids:
-        q = q.where(ExamAssignment.candidate_id.in_(body.candidate_ids))
-    rows = list(db.execute(q))
-    if not rows:
-        raise HTTPException(409, "No candidates are waiting for a link")
-    for a, c in rows:
-        issue_link(db, exam, a, c)
-    exam.status = ExamStatus.scheduled
+
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+
     db.commit()
     return _assignments(db, exam)
+
+
+@router.post("/{exam_id}/candidates/{candidate_id}/resend-invitation", response_model=AssignmentOut)
+def resend_candidate_invitation(
+    exam_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    mentor: User = Depends(mentor_or_admin),
+):
+    """Resends assessment invitation to a single enrolled candidate via the Invitation Agent."""
+    exam = own_exam(db, mentor, exam_id)
+    from app.agent.invitation_agent import run_invitation_agent
+
+    run_invitation_agent(
+        db=db,
+        exam_id=exam.id,
+        mentor=mentor,
+        force_resend=True,
+        candidate_filter_ids=[str(candidate_id)],
+    )
+
+    a = db.scalar(
+        select(ExamAssignment).where(
+            ExamAssignment.exam_id == exam.id, ExamAssignment.candidate_id == candidate_id
+        )
+    )
+    c = db.get(User, candidate_id)
+    if not a or not c:
+        raise HTTPException(404, "Candidate assignment not found")
+    return _assignment_out(a, c)
+
+
+@router.post("/{exam_id}/candidates/{candidate_id}/revoke-invitation", response_model=AssignmentOut)
+def revoke_candidate_invitation(
+    exam_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    mentor: User = Depends(mentor_or_admin),
+):
+    """Revokes an outstanding assessment invitation."""
+    exam = own_exam(db, mentor, exam_id)
+    a = db.scalar(
+        select(ExamAssignment).where(
+            ExamAssignment.exam_id == exam.id, ExamAssignment.candidate_id == candidate_id
+        )
+    )
+    c = db.get(User, candidate_id)
+    if not a or not c:
+        raise HTTPException(404, "Candidate assignment not found")
+
+    meta = dict(a.accommodations or {})
+    meta["revoked"] = True
+    meta["invitation_status"] = "Revoked"
+    a.accommodations = meta
+    a.link_token_hash = None
+    db.commit()
+    return _assignment_out(a, c)
+
 
 
 @router.post("/{exam_id}/import-questions", response_model=ExamDetailOut)

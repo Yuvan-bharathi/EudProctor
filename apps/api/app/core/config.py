@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     mail_from: str = "no-reply@eduproctor.example.com"
     mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory
 
+    # Email Delivery & YOPmail Test Mode
+    email_test_mode: bool = False
+    email_test_recipient: str = ""
+    email_from_address: str = ""
+    email_provider: str = "smtp"
+
     evidence_encryption_key: str = ""
     storage_dir: str = "storage"
     retention_days: int = 90

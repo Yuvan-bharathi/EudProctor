@@ -58,6 +58,17 @@ export interface Exam {
   status: "draft" | "scheduled" | "closed";
 }
 
+export type InvitationStatus =
+  | "Not Sent"
+  | "Pending"
+  | "Sending"
+  | "Sent"
+  | "Delivered"
+  | "Failed"
+  | "Accepted"
+  | "Expired"
+  | "Revoked";
+
 export interface Assignment {
   id: string;
   candidate_id: string;
@@ -68,6 +79,8 @@ export interface Assignment {
   link_used_at: string | null;
   link_expires_at: string | null;
   accommodations: Record<string, unknown>;
+  invitation_status?: InvitationStatus | string;
+  delivery_status?: string | null;
   status?: string;
   score_pct?: number | null;
   flags?: number;

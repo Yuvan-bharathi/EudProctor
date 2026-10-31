@@ -101,6 +101,43 @@ class SuggestOut(BaseModel):
     drafts: list[QuestionOut]
 
 
+class RecommendQuestionOption(BaseModel):
+    key: str
+    text: str
+    is_correct: bool
+
+
+class RecommendQuestionItem(BaseModel):
+    draft_id: str
+    topic: str
+    difficulty: int
+    marks: float
+    type: str = "mcq"
+    body: str
+    options: list[RecommendQuestionOption]
+    correct_key: str
+    concept_note: str
+
+
+class RecommendIn(BaseModel):
+    course_id: uuid.UUID | None = None
+    subject: str = "Full Stack Development"
+    topic: str = "Full Stack Architecture"
+    difficulty: int = 2
+    marks: float = 3.0
+    question_type: str = "mcq"
+    n: int = 3
+    exclude_bodies: list[str] = []
+
+
+class RecommendOut(BaseModel):
+    subject: str
+    topic: str
+    difficulty: int
+    marks: float
+    recommendations: list[RecommendQuestionItem]
+
+
 class ExamIn(BaseModel):
     course_id: uuid.UUID
     title: str = Field(min_length=1, max_length=200)
@@ -163,6 +200,8 @@ class AssignmentOut(BaseModel):
     link_used_at: datetime | None
     link_expires_at: datetime | None
     accommodations: dict[str, Any]
+    invitation_status: str = "Not Sent"
+    delivery_status: str | None = None
 
 
 class ExamDetailOut(ExamOut):
@@ -172,6 +211,10 @@ class ExamDetailOut(ExamOut):
 
 class SendLinksIn(BaseModel):
     candidate_ids: list[uuid.UUID] | None = None
+    force_resend: bool = False
+    test_mode: bool | None = None
+    test_recipient: str | None = None
+
 
 
 class JoinOut(BaseModel):
