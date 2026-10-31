@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -79,6 +80,34 @@ def start_session(session_id: uuid.UUID, db: Session = Depends(get_db), user: Us
     if sess.status != SessionStatus.calibrating:
         raise HTTPException(409, "Finish identity verification and calibration first.")
     svc.begin(db, sess)
+    db.commit()
+    return session_out(db, sess)
+
+
+class StartIn(BaseModel):
+    exam_id: uuid.UUID
+
+
+@router.post("/sessions/start", response_model=SessionOut)
+def start_exam_session(body: StartIn, db: Session = Depends(get_db), user: User = Depends(candidate_only)):
+    """Open (or resume) the candidate's attempt from the assessments page. There the browser camera-setup step is
+    the pre-start check, so the session moves straight to in_progress; the join-link flow keeps its server-side
+    identity steps. A session waiting on a mentor identity decision is never skipped."""
+    assignment = db.scalar(
+        select(ExamAssignment).where(ExamAssignment.exam_id == body.exam_id, ExamAssignment.candidate_id == user.id)
+    )
+    if assignment is None:
+        raise HTTPException(404, "This assessment is not assigned to you.")
+    opened = svc.open_session(db, assignment)
+    sess = svc.own_session(db, opened.id, user.id, lock=True)
+    pre_start = {SessionStatus.link_opened: SessionStatus.identity_check, SessionStatus.identity_check: SessionStatus.calibrating}
+    while sess.status in pre_start:
+        svc.transition(db, sess, pre_start[sess.status], "browser camera setup completed")
+    if sess.status == SessionStatus.calibrating:
+        svc.begin(db, sess)
+    elif sess.status in (SessionStatus.identity_review, SessionStatus.identity_blocked):
+        db.commit()
+        raise HTTPException(409, "Your identity check is with your mentor. Please contact them before starting.")
     db.commit()
     return session_out(db, sess)
 

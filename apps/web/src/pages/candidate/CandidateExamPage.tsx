@@ -10,13 +10,22 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { Button } from "@/components/ui/button";
+import { AnswerSync } from "@/features/assessment/answerSync";
+import { makeClock } from "@/features/assessment/clock";
+import type { CandidateSession } from "@/features/assessment/types";
+import { useProctoring } from "@/features/proctoring/ProctoringLayer";
+import { api, errorMessage } from "@/lib/api";
 import { getExamQuestions } from "@/lib/candidateExamQuestions";
 import { getPersistedAssessments, saveCandidateSubmission } from "@/lib/mockData";
 import type { Question } from "@/lib/types";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DONE = new Set(["submitted", "scored", "analysed"]);
 
 export function CandidateExamPage() {
   usePageTitle("Assessment in Progress");
@@ -24,10 +33,57 @@ export function CandidateExamPage() {
   const [searchParams] = useSearchParams();
   const examId = searchParams.get("examId") || "ut-3";
 
+  // Backend assessments get a real session: server questions, autosave, deadline and proctoring.
+  // Local demo assessments (ut-*) keep the browser-only flow.
+  const sessionQuery = useQuery({
+    queryKey: ["exam-session", examId],
+    queryFn: () => api<CandidateSession>("/sessions/start", { body: { exam_id: examId } }),
+    enabled: UUID_RE.test(examId),
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const remote = sessionQuery.data ?? null;
+  const session = remote?.status === "in_progress" ? remote : null;
+  const { count: flagCount, max: maxFlags, notice, noticeReason, videoRef } = useProctoring(session);
+  const sync = useMemo(
+    () =>
+      session
+        ? new AnswerSync(session.id, (batch) =>
+            api<{ acks: { question_id: string; client_seq: number; accepted: boolean }[] }>(
+              `/sessions/${session.id}/answers`,
+              { method: "PUT", body: { answers: batch } },
+            ),
+          )
+        : null,
+    [session],
+  );
+
   // Load exam metadata and questions
   const assessments = getPersistedAssessments();
-  const exam = assessments.find((a) => a.id === examId) ?? assessments[0];
-  const questions = useMemo(() => getExamQuestions(examId), [examId]);
+  const localExam = assessments.find((a) => a.id === examId) ?? assessments[0];
+  const exam = remote ? { ...localExam, title: remote.exam_title, duration_min: remote.duration_min } : localExam;
+  const questions = useMemo<Question[]>(
+    () =>
+      session
+        ? session.questions.map((q) => ({
+            id: q.id,
+            course_id: "",
+            topic_id: "",
+            subtopic: "",
+            type: q.type,
+            difficulty: 1,
+            marks: q.marks,
+            body: q.body,
+            options: q.options.map((o) => ({ ...o, id: o.key, is_correct: false, misconception_id: null })),
+            answer_text: "",
+            status: "approved",
+            source: "mentor",
+            agent_run_id: null,
+          }) as Question)
+        : getExamQuestions(examId),
+    [session, examId],
+  );
   const totalQuestions = questions.length;
 
   // Active question state: strictly starts at Question 1
@@ -43,20 +99,76 @@ export function CandidateExamPage() {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // Calm proctoring flag counter capped at 3 per design rules
-  const flagCount = 1;
-  const [showBanner, setShowBanner] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Timer countdown: 60 minutes or exam duration
+  // Calm proctoring notice: only for a new red flag (long look-away or leaving the tab), capped at max flags.
+  // Flags come from the server via useProctoring; nothing is shown until one is actually raised.
+  const [dismissedNotice, setDismissedNotice] = useState<number | null>(null);
+  const showBanner = notice !== null && notice !== dismissedNotice;
+
+  // Timer countdown: the server deadline for a backend session, otherwise the exam duration
   const initialSeconds = (exam?.duration_min || 60) * 60;
   const [secondsRemaining, setSecondsRemaining] = useState(initialSeconds);
 
   useEffect(() => {
+    const clock = session ? makeClock(session.server_now, session.deadline_at) : null;
+    if (clock) setSecondsRemaining(Math.ceil((clock.remainingMs() ?? 0) / 1000));
     const timer = setInterval(() => {
-      setSecondsRemaining((prev) => (prev > 0 ? prev - 1 : 0));
+      if (clock) setSecondsRemaining(Math.ceil((clock.remainingMs() ?? 0) / 1000));
+      else setSecondsRemaining((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [session]);
+
+  // Autosave: restore saved answers (server + offline buffer), then flush every few seconds
+  useEffect(() => {
+    if (!session || !sync) return;
+    const numberOf = new Map(session.questions.map((q) => [q.id, q.number]));
+    const toAnswers = (entries: [string, Record<string, unknown>][]) =>
+      Object.fromEntries(
+        entries
+          .filter(([qid, v]) => numberOf.has(qid) && typeof v.option_key === "string")
+          .map(([qid, v]) => [numberOf.get(qid)!, v.option_key as string]),
+      );
+    setAnswers(toAnswers(Object.entries(session.answers).map(([k, v]) => [k, v.value])));
+    const seqs = Object.fromEntries(Object.entries(session.answers).map(([k, v]) => [k, v.client_seq]));
+    void sync.init(seqs).then((local) => {
+      if (local.size) setAnswers((a) => ({ ...a, ...toAnswers([...local.entries()]) }));
+      void sync.flush();
+    });
+    sync.start();
+    return () => sync.stop();
+    // session.answers is only the initial snapshot
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync]);
+
+  // The server deadline auto-submits; reflect it here once time is up
+  useEffect(() => {
+    if (session && secondsRemaining <= 0 && !isSubmitted) {
+      void sync?.flush();
+      setIsSubmitted(true);
+      setShowSubmitModal(true);
+    }
+  }, [session, secondsRemaining, isSubmitted, sync]);
+
+  async function handleConfirmSubmit() {
+    if (session && sync) {
+      setIsSubmitting(true);
+      setSubmitError(null);
+      await sync.flush();
+      try {
+        await api(`/sessions/${session.id}/submit`, { method: "POST" });
+      } catch (err) {
+        setSubmitError(`${errorMessage(err)} Your answers are kept – please try again.`);
+        setIsSubmitting(false);
+        return;
+      }
+      setIsSubmitting(false);
+    }
+    saveCandidateSubmission(examId, answers, totalQuestions);
+    setIsSubmitted(true);
+  }
 
   // Prevent browser back navigation and accidental tab closure during the active assessment
   useEffect(() => {
@@ -111,6 +223,7 @@ export function CandidateExamPage() {
       ...prev,
       [currentQuestionNumber]: key,
     }));
+    if (sync && currentQuestionData.id !== "empty") void sync.record(currentQuestionData.id, { option_key: key });
   };
 
   // Bookmark toggle handler
@@ -129,8 +242,40 @@ export function CandidateExamPage() {
   const answeredCount = Object.keys(answers).length;
   const unansweredCount = totalQuestions - answeredCount;
 
+  if (sessionQuery.isFetching && !remote) {
+    return (
+      <div className="mx-auto max-w-md rounded-xl border border-border bg-surface p-8 text-center text-sm text-muted shadow-2xs">
+        Preparing your assessment…
+      </div>
+    );
+  }
+
+  if (sessionQuery.isError || (remote && remote.status !== "in_progress")) {
+    const done = remote && DONE.has(remote.status);
+    return (
+      <div className="mx-auto max-w-md space-y-4 rounded-xl border border-border bg-surface p-8 text-center shadow-2xs">
+        <h3 className="text-base font-bold text-text">
+          {done ? "Assessment already submitted" : "This assessment cannot be started"}
+        </h3>
+        <p className="text-xs text-muted leading-relaxed">
+          {done
+            ? "Your answers are saved. Your mentor will publish your results and recommendations."
+            : sessionQuery.isError
+              ? errorMessage(sessionQuery.error)
+              : "The assessment window has closed. Please contact your mentor if you think this is a mistake."}
+        </p>
+        <Button onClick={() => navigate("/candidate/assessments")} className="bg-primary-600 text-white hover:bg-primary-700 text-xs">
+          Return to Assessments
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-5">
+      {/* Camera frames are analysed in the browser only; video is never uploaded */}
+      <video ref={videoRef} className="hidden" muted playsInline aria-hidden="true" />
+
       {/* Top Bar matching Screen 8 & Image 2 */}
       <div className="flex flex-col justify-between gap-3 rounded-xl border border-border bg-surface px-5 py-3.5 shadow-2xs sm:flex-row sm:items-center">
         <div>
@@ -162,11 +307,11 @@ export function CandidateExamPage() {
             }`}
           >
             <div className="flex items-center gap-1">
-              <span className={`size-2 rounded-full ${flagCount >= 1 ? "bg-danger-500" : "bg-border-strong"}`} />
-              <span className={`size-2 rounded-full ${flagCount >= 2 ? "bg-danger-500" : "bg-border-strong"}`} />
-              <span className={`size-2 rounded-full ${flagCount >= 3 ? "bg-danger-500" : "bg-border-strong"}`} />
+              {Array.from({ length: maxFlags }, (_, i) => (
+                <span key={i} className={`size-2 rounded-full ${flagCount > i ? "bg-danger-500" : "bg-border-strong"}`} />
+              ))}
             </div>
-            <span>Flags {flagCount} of 3</span>
+            <span>Flags {flagCount} of {maxFlags}</span>
           </div>
         </div>
       </div>
@@ -195,7 +340,7 @@ export function CandidateExamPage() {
       ) : (
         <>
           {/* Calm Flag Notice Banner */}
-          {showBanner && flagCount > 0 && (
+          {showBanner && (
             <div
               role="status"
               aria-live="polite"
@@ -204,12 +349,13 @@ export function CandidateExamPage() {
               <div className="flex items-center gap-2.5">
                 <Eye className="size-4 shrink-0 text-danger-500" />
                 <span className="font-medium">
-                  Flag {flagCount} of 3 — please keep your eyes on the screen.
+                  Flag {notice} of {maxFlags} —{" "}
+                  {noticeReason === "tab" ? "please stay on the assessment tab." : "please keep your eyes on the screen."}
                 </span>
               </div>
               <button
                 type="button"
-                onClick={() => setShowBanner(false)}
+                onClick={() => setDismissedNotice(notice)}
                 className="rounded p-0.5 text-danger-700/70 hover:text-danger-700 cursor-pointer"
                 aria-label="Dismiss banner"
               >
@@ -446,18 +592,22 @@ export function CandidateExamPage() {
                   summary and publish your personalized recommendations and practice set.
                 </div>
 
+                {submitError && (
+                  <div role="alert" className="rounded-lg border border-danger-500/30 bg-danger-50 p-3 text-xs text-danger-700">
+                    {submitError}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-2">
                   <Button variant="secondary" onClick={() => setShowSubmitModal(false)}>
                     Return to questions
                   </Button>
                   <Button
-                    onClick={() => {
-                      saveCandidateSubmission(examId, answers, totalQuestions);
-                      setIsSubmitted(true);
-                    }}
+                    onClick={() => void handleConfirmSubmit()}
+                    disabled={isSubmitting}
                     className="bg-primary-600 text-white hover:bg-primary-700"
                   >
-                    Confirm & submit
+                    {isSubmitting ? "Submitting…" : "Confirm & submit"}
                   </Button>
                 </div>
               </>

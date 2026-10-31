@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Proctoring tab of the assessment workspace (mentor only).
  *
  * One card per candidate with their proctoring summary; a dropdown expands the full timeline with evidence and
@@ -6,8 +6,10 @@
  * It shows what the browser reports in real time (looking at the screen or away, direction, duration, camera
  * problems). No video is shown: video never leaves the candidate's browser (CLAUDE.md rule 6).
  *
- * Real data comes from the API; when an assessment has no sessions yet the workspace's sample data is shown,
- * clearly labelled.
+ * Real data comes from the API and is refreshed every few seconds, so it also works where the WebSocket cannot
+ * connect (e.g. behind a proxy without upgrade support); the WebSocket only makes updates instant. Assigned
+ * candidates without a session are listed as not started. Sample data is shown, clearly labelled, only for local
+ * demo assessments the API does not know.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -51,6 +53,9 @@ interface LiveRow {
   other_alerts: number;
   high_alerts: number;
   open_identity_reviews: number;
+  started_at?: string | null;
+  looking_away?: { source?: LookSource; direction?: string; duration_ms?: number } | null;
+  recent_alerts?: LiveAlert[];
 }
 
 interface TimelineItem {
@@ -60,7 +65,7 @@ interface TimelineItem {
   type: string;
   severity: "high" | "medium" | "low";
   flag_no: number | null;
-  source: LookSource | null;
+  source: LookSource | "tab" | null;
   direction: string | null;
   started_at: string;
   exam_clock_ms: number | null;
@@ -81,7 +86,7 @@ interface LiveAlert {
   session_id: string;
   at?: string;
   flag_no?: number | null;
-  source?: LookSource;
+  source?: LookSource | "tab";
   direction?: string;
   duration_ms?: number;
   type?: string;
@@ -118,6 +123,14 @@ function fromLive(r: LiveRow, emails: Map<string, string>): CandidateCard {
     key: r.session_id, sessionId: r.session_id, name: r.candidate_name, email: emails.get(r.candidate_id) ?? "", status, statusLabel: label,
     flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, headGlances: r.head_glances, eyeGlances: r.eye_glances,
     otherAlerts: r.other_alerts, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
+  };
+}
+
+function fromAssignment(a: Assignment): CandidateCard {
+  return {
+    key: `assignment-${a.id}`, sessionId: null, name: a.candidate_name, email: a.candidate_email, status: "not_started",
+    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, headGlances: 0, eyeGlances: 0, otherAlerts: 0,
+    highAlerts: 0, identityReviews: 0,
   };
 }
 
@@ -246,7 +259,7 @@ function DecisionCell({ item, sessionId, examId }: { item: TimelineItem; session
 }
 
 function EventCell({ item }: { item: TimelineItem }) {
-  if (item.kind === "glance") return <GlanceChip source={item.source ?? "head"} />;
+  if (item.kind === "glance") return <GlanceChip source={item.source === "eyes" ? "eyes" : "head"} />;
   if (item.kind === "red_flag" || item.kind === "post_limit") return <RedFlagChip flagNo={item.flag_no} max={3} source={item.source ?? undefined} />;
   return (
     <span className="inline-flex items-center gap-2">
@@ -256,14 +269,45 @@ function EventCell({ item }: { item: TimelineItem }) {
   );
 }
 
-function RealDetails({ sessionId, examId }: { sessionId: string; examId: string }) {
-  const q = useQuery({ queryKey: ["proctoring-details", sessionId], queryFn: () => api<SessionDetails>(`/mentor/sessions/${sessionId}/details`) });
+/** Per-candidate report: what was recorded, by type, above the full timeline. */
+function ReportSummary({ items }: { items: TimelineItem[] }) {
+  const byType = new Map<string, number>();
+  for (const i of items) {
+    const label = i.kind === "glance" ? `${i.source === "eyes" ? "Eye" : "Head"} glances` : eventLabel(i.type);
+    byType.set(label, (byType.get(label) ?? 0) + 1);
+  }
+  const longest = Math.max(0, ...items.filter((i) => i.kind === "glance" || i.type.startsWith("LOOK_AWAY")).map((i) => i.duration_ms));
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="font-semibold text-text">Report:</span>
+      {[...byType.entries()].map(([label, n]) => (
+        <span key={label} className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
+          {label} <strong>{n}</strong>
+        </span>
+      ))}
+      {longest > 0 && (
+        <span className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
+          Longest look-away <strong>{formatDuration(longest)}</strong>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function RealDetails({ sessionId, examId, live }: { sessionId: string; examId: string; live: boolean }) {
+  const q = useQuery({
+    queryKey: ["proctoring-details", sessionId],
+    queryFn: () => api<SessionDetails>(`/mentor/sessions/${sessionId}/details`),
+    refetchInterval: live ? 5000 : false,
+  });
   if (q.isPending) return <LoadingState rows={3} label="Loading proctoring details" />;
   if (q.isError) return <ErrorState message="Could not load proctoring details." onRetry={() => q.refetch()} />;
   const items = q.data.timeline;
   if (items.length === 0)
     return <p className="flex items-center gap-2 text-sm text-text"><ShieldCheck className="size-4 text-success-700" aria-hidden="true" /> Nothing recorded for this candidate.</p>;
   return (
+    <div className="space-y-3">
+    <ReportSummary items={items} />
     <Table>
       <THead>
         <tr>
@@ -292,6 +336,7 @@ function RealDetails({ sessionId, examId }: { sessionId: string; examId: string 
         ))}
       </TBody>
     </Table>
+    </div>
   );
 }
 
@@ -335,7 +380,7 @@ function SampleDetails() {
 
 // ---------- Live Cam: live camera status (no video) ----------
 interface LiveState {
-  away?: { source?: LookSource; direction?: string; duration_ms?: number; at: number };
+  away?: { source?: LookSource | "tab"; direction?: string; duration_ms?: number; at: number };
   recent: LiveAlert[];
   cameraIssue?: boolean;
 }
@@ -434,7 +479,7 @@ function LiveCamPanel({ card, state, connected, onClose }: { card: CandidateCard
                 <li key={i} className="flex items-center gap-2">
                   <span className="font-mono text-xs text-muted">{a.at ? new Date(a.at).toLocaleTimeString() : ""}</span>
                   {a.kind === "glance" ? (
-                    <GlanceChip source={a.source ?? "head"} durationMs={a.duration_ms} />
+                    <GlanceChip source={a.source === "eyes" ? "eyes" : "head"} durationMs={a.duration_ms} />
                   ) : a.kind === "red_flag" || a.kind === "post_limit" ? (
                     <RedFlagChip flagNo={a.flag_no ?? null} max={card.maxFlags} source={a.source} />
                   ) : (
@@ -529,7 +574,13 @@ function CandidateProctoringCard({
       </div>
       {open && (
         <div id={panelId} className="space-y-3 border-t border-border p-4">
-          {card.sessionId ? <RealDetails sessionId={card.sessionId} examId={examId} /> : <SampleDetails />}
+          {card.sessionId ? (
+            <RealDetails sessionId={card.sessionId} examId={examId} live={card.status === "live"} />
+          ) : card.sample ? (
+            <SampleDetails />
+          ) : (
+            <p className="text-sm text-muted">This candidate has not started the assessment yet.</p>
+          )}
           {card.sessionId && (
             <Link to={`/mentor/sessions/${card.sessionId}`} className="inline-block text-sm text-primary-700 underline underline-offset-2">
               Open full proctoring page
@@ -546,8 +597,14 @@ const ORDER: Record<CandidateCard["status"], number> = { live: 0, identity: 1, s
 
 export function ProctoringTab({ examId, assignments }: { examId: string; assignments: Assignment[] }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["live", examId], queryFn: () => api<LiveRow[]>(`/mentor/exams/${examId}/live`), retry: false });
-  const real = (q.data?.length ?? 0) > 0;
+  // polled as well as pushed: the WebSocket cannot connect through every proxy
+  const q = useQuery({
+    queryKey: ["live", examId],
+    queryFn: () => api<LiveRow[]>(`/mentor/exams/${examId}/live`),
+    retry: false,
+    refetchInterval: 3000,
+  });
+  const real = Array.isArray(q.data);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [liveCam, setLiveCam] = useState<string | null>(null);
   const [live, setLive] = useState<Record<string, LiveState>>({});
@@ -585,9 +642,24 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
   if (q.isPending) return <LoadingState rows={4} label="Loading candidates" />;
 
   const emails = new Map(assignments.map((a) => [a.candidate_id, a.candidate_email]));
-  const cards = (real ? q.data!.map((r) => fromLive(r, emails)) : mockLiveCandidates.map(fromSample)).sort(
-    (a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name),
-  );
+  const rows = real ? q.data! : [];
+  const withSession = new Set(rows.map((r) => r.candidate_id));
+  const cards = (
+    real
+      ? [...rows.map((r) => fromLive(r, emails)), ...assignments.filter((a) => !withSession.has(a.candidate_id)).map(fromAssignment)]
+      : mockLiveCandidates.map(fromSample)
+  ).sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name));
+  // without the WebSocket, the polled rows carry the ongoing look-away and the latest alerts
+  const liveState = (key: string): LiveState | undefined => {
+    if (connected) return live[key];
+    const r = rows.find((x) => x.session_id === key);
+    if (!r) return live[key];
+    return {
+      away: r.looking_away ? { ...r.looking_away, at: Date.now() } : undefined, // the server already expires it
+      recent: r.recent_alerts ?? [],
+      cameraIssue: (r.recent_alerts ?? []).some((a) => a.type === "CAMERA_UNAVAILABLE"),
+    };
+  };
   const liveCount = cards.filter((c) => c.status === "live").length;
   const toggle = (key: string) =>
     setOpen((s) => {
@@ -609,10 +681,10 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {!real && <Badge tone="warning">Sample data · no candidate has opened this assessment yet</Badge>}
+          {!real && <Badge tone="warning">Sample data · this assessment is not on the server</Badge>}
           {real && (
             <span className="flex items-center gap-1.5 text-xs text-muted" role="status">
-              <Radio className="size-4" aria-hidden="true" /> {connected ? "Live" : "Connecting…"}
+              <Radio className="size-4" aria-hidden="true" /> {connected ? "Live" : "Live · refreshing every 3 s"}
             </span>
           )}
           {cards.length > 0 && (
@@ -634,12 +706,12 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
               open={open.has(c.key)}
               onToggle={() => toggle(c.key)}
               onLiveCam={() => setLiveCam(c.key)}
-              live={live[c.key]}
+              live={liveState(c.key)}
             />
           ))}
         </ul>
       )}
-      {camCard && <LiveCamPanel card={camCard} state={live[camCard.key]} connected={connected} onClose={() => setLiveCam(null)} />}
+      {camCard && <LiveCamPanel card={camCard} state={liveState(camCard.key)} connected={connected || real} onClose={() => setLiveCam(null)} />}
     </div>
   );
 }

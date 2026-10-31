@@ -142,6 +142,8 @@ class ExamOut(ORM):
     created_by: str | None = None
     question_count: int = 0
     candidates_count: int = 0
+    sessions_count: int = 0  # candidates who have started
+    completed_count: int = 0
     created_at: datetime | None = None
 
 
@@ -165,6 +167,7 @@ class AssignmentOut(BaseModel):
     candidate_phone: str | None = None
     accommodations: dict[str, Any]
     status: str = 'Not started'
+    session_id: uuid.UUID | None = None
 
 
 class ExamDetailOut(ExamOut):

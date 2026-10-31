@@ -24,6 +24,7 @@ from app.models import (
     QuestionSource,
     User,
 )
+from app.models.session import ExamSession, SessionStatus
 from app.routers.courses import mentor_course_ids, require_course_mentor
 from app.schemas.exams import (
     ImportQuestionsIn,
@@ -82,7 +83,16 @@ def set_exam_questions(db: Session, exam: Exam, question_ids: list[uuid.UUID]) -
     exam.questions.extend(ExamQuestion(question_id=qid, order=i) for i, qid in enumerate(question_ids))
 
 
-def _assignment_out(a: ExamAssignment, c: User) -> AssignmentOut:
+DONE = (SessionStatus.submitted, SessionStatus.scored, SessionStatus.analysed)
+
+
+def _assignment_status(s: ExamSession | None) -> str:
+    if s is None or s.started_at is None:
+        return "Not started"
+    return "Completed" if s.status in DONE else "In progress"
+
+
+def _assignment_out(a: ExamAssignment, c: User, s: ExamSession | None = None) -> AssignmentOut:
     return AssignmentOut(
         id=a.id,
         candidate_id=c.id,
@@ -92,17 +102,20 @@ def _assignment_out(a: ExamAssignment, c: User) -> AssignmentOut:
         link_used_at=a.link_used_at,
         link_expires_at=a.link_expires_at,
         accommodations=a.accommodations or {},
+        status=_assignment_status(s),
+        session_id=s.id if s else None,
     )
 
 
 def _assignments(db: Session, exam: Exam) -> list[AssignmentOut]:
     rows = db.execute(
-        select(ExamAssignment, User)
+        select(ExamAssignment, User, ExamSession)
         .join(User, User.id == ExamAssignment.candidate_id)
+        .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
         .where(ExamAssignment.exam_id == exam.id)
         .order_by(User.name)
     )
-    return [_assignment_out(a, c) for a, c in rows]
+    return [_assignment_out(a, c, s) for a, c, s in rows]
 
 
 def _detail(db: Session, exam: Exam) -> ExamDetailOut:
@@ -115,9 +128,7 @@ def _detail(db: Session, exam: Exam) -> ExamDetailOut:
             .options(selectinload(ExamQuestion.question).selectinload(Question.options))
         )
     ]
-    return ExamDetailOut(
-        **ExamOut.model_validate(exam).model_dump(), questions=qs, assignments=_assignments(db, exam)
-    )
+    return ExamDetailOut(**_to_exam_out(db, exam).model_dump(), questions=qs, assignments=_assignments(db, exam))
 
 
 def _to_exam_out(db: Session, e: Exam) -> ExamOut:
@@ -125,6 +136,12 @@ def _to_exam_out(db: Session, e: Exam) -> ExamOut:
     mentor = db.get(User, e.mentor_id)
     q_count = len(e.questions) if e.questions else 0
     cand_count = db.scalar(select(func.count(ExamAssignment.id)).where(ExamAssignment.exam_id == e.id)) or 0
+    started = db.scalar(
+        select(func.count(ExamSession.id)).where(ExamSession.exam_id == e.id, ExamSession.started_at.is_not(None))
+    )
+    completed = db.scalar(
+        select(func.count(ExamSession.id)).where(ExamSession.exam_id == e.id, ExamSession.status.in_(DONE))
+    )
     return ExamOut(
         id=e.id,
         course_id=e.course_id,
@@ -141,6 +158,8 @@ def _to_exam_out(db: Session, e: Exam) -> ExamOut:
         created_by=mentor.name if mentor else "Mentor",
         question_count=q_count,
         candidates_count=cand_count,
+        sessions_count=started or 0,
+        completed_count=completed or 0,
         created_at=e.created_at,
     )
 

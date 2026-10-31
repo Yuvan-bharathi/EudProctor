@@ -43,6 +43,7 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { CoursePicker } from "@/features/mentor/CoursePicker";
+import { ProctoringTab } from "@/features/proctoring/ProctoringTab";
 import {
   type AIQuestionSuggestion,
   convertAIQuestionsToQuestions,
@@ -68,7 +69,7 @@ import {
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
 
-export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings";
+export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings" | "proctoring";
 
 interface AssessmentWorkspaceProps {
   initialTab?: WorkspaceTab;
@@ -860,13 +861,14 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
       </div>
 
-      {/* Subtabs Bar: Overview | Questions | Candidates & Telemetry | Settings */}
+      {/* Subtabs Bar: Overview | Questions | Candidates & Telemetry | Settings | Proctoring */}
       <div className="flex flex-wrap items-center gap-1 border-b border-border pb-1">
         {[
           { key: "overview", label: "Overview" },
           { key: "questions", label: `Questions (${questions.length})` },
           { key: "candidates", label: `Candidates & Telemetry (${assignments.length})` },
           { key: "settings", label: "Settings" },
+          { key: "proctoring", label: "Proctoring" },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -1836,6 +1838,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               </div>
             </form>
           </Card>
+        </div>
+      )}
+
+      {/* TAB 5: PROCTORING (LIVE CANDIDATE STATUS, FLAGS, GLANCES, ALERTS & TIMELINE REPORTS) */}
+      {activeTab === "proctoring" && (
+        <div className="animate-in fade-in">
+          <ProctoringTab examId={examId} assignments={assignments} />
         </div>
       )}
 

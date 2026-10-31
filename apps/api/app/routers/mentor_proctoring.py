@@ -14,6 +14,7 @@ from app.core.db import get_db
 from app.core.deps import mentor_only
 from app.models import Exam, ExamSession, IdentityCheck, User
 from app.models.proctoring import CandidateFlag, FlagReview, GlanceLog, ProctorEvent
+from app.proctoring import live
 from app.routers.exams import own_exam
 from app.routers.mentor import mentor_session
 
@@ -120,11 +121,12 @@ def session_details(
     items: list[TimelineItem] = []
     for e in db.scalars(select(ProctorEvent).where(ProctorEvent.session_id == sess.id)):
         flag_no = (e.payload or {}).get("flag_no")
+        flagged_tab = e.type == "TAB_SWITCH" and "flag_no" in (e.payload or {})  # tab switches raise red flags
         kind = (
             "red_flag"
-            if e.type == "LOOK_AWAY_FLAG"
+            if e.type == "LOOK_AWAY_FLAG" or (flagged_tab and flag_no)
             else "post_limit"
-            if e.type == "LOOK_AWAY_POST_LIMIT"
+            if e.type == "LOOK_AWAY_POST_LIMIT" or flagged_tab
             else "alert"
         )
         r = reviews.get(e.id)
@@ -249,6 +251,30 @@ class LiveRow(BaseModel):
     other_alerts: int
     high_alerts: int
     open_identity_reviews: int
+    started_at: datetime | None = None
+    looking_away: dict | None = None  # ongoing look-away right now (source, direction, duration_ms)
+    recent_alerts: list[dict] = []  # latest alerts, newest first
+
+
+def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, int], reviews: int) -> LiveRow:
+    ongoing, recent = live.snapshot(str(s.id))
+    return LiveRow(
+        session_id=s.id,
+        candidate_id=u.id,
+        candidate_name=u.name,
+        status=s.status.value,
+        flag_count=min(s.flag_count, exam.max_flags),
+        max_flags=exam.max_flags,
+        flag_limit_reached=s.flag_limit_reached,
+        head_glances=c["head"],
+        eye_glances=c["eyes"],
+        other_alerts=c["alerts"],
+        high_alerts=c["high"],
+        open_identity_reviews=reviews,
+        started_at=s.started_at,
+        looking_away=ongoing if s.status.value == "in_progress" else None,
+        recent_alerts=recent,
+    )
 
 
 @router.get("/exams/{exam_id}/live", response_model=list[LiveRow])
@@ -278,20 +304,4 @@ def exam_live(exam_id: uuid.UUID, db: Session = Depends(get_db), mentor: User = 
         if rows
         else {}
     )
-    return [
-        LiveRow(
-            session_id=s.id,
-            candidate_id=u.id,
-            candidate_name=u.name,
-            status=s.status.value,
-            flag_count=min(s.flag_count, exam.max_flags),
-            max_flags=exam.max_flags,
-            flag_limit_reached=s.flag_limit_reached,
-            head_glances=counts[s.id]["head"],
-            eye_glances=counts[s.id]["eyes"],
-            other_alerts=counts[s.id]["alerts"],
-            high_alerts=counts[s.id]["high"],
-            open_identity_reviews=reviews.get(s.id, 0),
-        )
-        for s, u in rows
-    ]
+    return [_live_row(s, u, exam, counts[s.id], reviews.get(s.id, 0)) for s, u in rows]
