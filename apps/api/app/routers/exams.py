@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.deps import mentor_only, mentor_or_admin
+from app.models.base import utcnow
 from app.models import (
     Topic,
     QuestionOption,
