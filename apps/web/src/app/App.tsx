@@ -14,6 +14,7 @@ import { CandidateResultsViewPage } from "@/pages/candidate/CandidateResultsView
 import { JoinPage } from "@/pages/candidate/JoinPage";
 import { SessionPage } from "@/pages/candidate/SessionPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { NotificationsPage } from "@/pages/NotificationsPage";
 import { CandidateResultPage } from "@/pages/mentor/CandidateResultPage";
 import { ExamDetailPage } from "@/pages/mentor/ExamDetailPage";
 import { ExamResultsPage } from "@/pages/mentor/ExamResultsPage";
@@ -22,7 +23,6 @@ import { IdentityReviewPage } from "@/pages/mentor/IdentityReviewPage";
 import { MarkingPage } from "@/pages/mentor/MarkingPage";
 import { MentorHomePage } from "@/pages/mentor/MentorHomePage";
 import { QuestionBankPage } from "@/pages/mentor/QuestionBankPage";
-import { SessionDetailsPage } from "@/pages/mentor/SessionDetailsPage";
 import { AdminAttendanceAuditPage } from "@/pages/internship/admin/AdminAttendanceAuditPage";
 import { AdminCodingBankPage } from "@/pages/internship/admin/AdminCodingBankPage";
 import { AdminCohortsPage } from "@/pages/internship/admin/AdminCohortsPage";
@@ -54,6 +54,7 @@ export function App() {
       <Route path="/design-showcase" element={<Navigate to="/" replace />} />
       <Route path="/showcase" element={<Navigate to="/" replace />} />
       <Route path="/styleguide" element={<Navigate to="/" replace />} />
+      <Route path="/notifications" element={<Navigate to="/mentor/notifications" replace />} />
 
       {/* Admin Portal */}
       <Route path="/admin" element={<RoleLayout role="admin" />}>
@@ -64,13 +65,15 @@ export function App() {
         <Route path="exams" element={<ExamsPage />} />
         <Route path="exams/:examId" element={<ExamDetailPage />} />
         <Route path="exams/:examId/results" element={<ExamResultsPage />} />
-        <Route path="sessions/:sessionId" element={<SessionDetailsPage />} />
+        {/* proctoring lives in each assessment's Proctoring tab; old session links land on the list */}
+        <Route path="sessions/:sessionId" element={<Navigate to="/admin/exams" replace />} />
         <Route path="courses" element={<Navigate to="/admin/exams" replace />} />
         <Route path="courses/:courseId" element={<Navigate to="/admin/exams" replace />} />
         <Route path="notes" element={<Navigate to="/admin/exams" replace />} />
         <Route path="agent" element={<Navigate to="/admin" replace />} />
         <Route path="agent/runs/:runId" element={<Navigate to="/admin" replace />} />
         <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
 
         {/* Admin Internship Routes */}
         <Route path="internship" element={<AdminInternshipDashboardPage />} />
@@ -83,6 +86,7 @@ export function App() {
       {/* Mentor Portal */}
       <Route path="/mentor" element={<RoleLayout role="mentor" />}>
         <Route index element={<MentorHomePage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="questions" element={<QuestionBankPage />} />
         <Route path="exams" element={<ExamsPage />} />
         <Route path="exams/:examId" element={<ExamDetailPage />} />
@@ -96,7 +100,7 @@ export function App() {
         <Route path="proctoring" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="notes" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="identity" element={<IdentityReviewPage />} />
-        <Route path="sessions/:sessionId" element={<SessionDetailsPage />} />
+        <Route path="sessions/:sessionId" element={<Navigate to="/mentor/exams" replace />} />
         <Route path="sessions/:sessionId/result" element={<CandidateResultPage />} />
         <Route path="sessions/:sessionId/summary" element={<CandidateResultPage />} />
         <Route path="agent" element={<Navigate to="/mentor" replace />} />
@@ -161,6 +165,7 @@ export function App() {
         <Route path="results" element={<CandidateResultsViewPage />} />
         <Route path="practice" element={<Navigate to="/candidate/assessments" replace />} />
         <Route path="practice/:practiceId" element={<Navigate to="/candidate/assessments" replace />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="profile" element={<CandidateProfilePage />} />
 
         {/* Mentee Internship Routes */}

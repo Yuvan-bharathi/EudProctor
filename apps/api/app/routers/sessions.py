@@ -1,12 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.deps import candidate_only
-from app.models import ExamAssignment, Question, QuestionType, User
+from app.models import Course, Exam, ExamAssignment, ExamQuestion, Question, QuestionType, User
 from app.models.base import utcnow
 from app.models.session import Answer, ExamSession, SessionStatus, SubmitReason
 from app.schemas.sessions import (
@@ -83,6 +84,34 @@ def start_session(session_id: uuid.UUID, db: Session = Depends(get_db), user: Us
     return session_out(db, sess)
 
 
+class StartIn(BaseModel):
+    exam_id: uuid.UUID
+
+
+@router.post("/sessions/start", response_model=SessionOut)
+def start_exam_session(body: StartIn, db: Session = Depends(get_db), user: User = Depends(candidate_only)):
+    """Open (or resume) the candidate's attempt from the assessments page. There the browser camera-setup step is
+    the pre-start check, so the session moves straight to in_progress; the join-link flow keeps its server-side
+    identity steps. A session waiting on a mentor identity decision is never skipped."""
+    assignment = db.scalar(
+        select(ExamAssignment).where(ExamAssignment.exam_id == body.exam_id, ExamAssignment.candidate_id == user.id)
+    )
+    if assignment is None:
+        raise HTTPException(404, "This assessment is not assigned to you.")
+    opened = svc.open_session(db, assignment)
+    sess = svc.own_session(db, opened.id, user.id, lock=True)
+    pre_start = {SessionStatus.link_opened: SessionStatus.identity_check, SessionStatus.identity_check: SessionStatus.calibrating}
+    while sess.status in pre_start:
+        svc.transition(db, sess, pre_start[sess.status], "browser camera setup completed")
+    if sess.status == SessionStatus.calibrating:
+        svc.begin(db, sess)
+    elif sess.status in (SessionStatus.identity_review, SessionStatus.identity_blocked):
+        db.commit()
+        raise HTTPException(409, "Your identity check is with your mentor. Please contact them before starting.")
+    db.commit()
+    return session_out(db, sess)
+
+
 def _valid_value(q: Question, value: dict) -> bool:
     if value == {}:
         return True  # cleared answer
@@ -155,23 +184,41 @@ def submit_session(
 
 @router.get("/candidates/me/assessments", response_model=list[MyAssessment])
 def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate_only)):
-    rows = db.execute(
-        select(ExamAssignment, ExamSession)
-        .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
-        .where(ExamAssignment.candidate_id == user.id)
+    """Newest first: latest scheduled start, then most recently assigned. One query (no per-row lookups)."""
+    q_counts = (
+        select(ExamQuestion.exam_id, func.count().label("n")).group_by(ExamQuestion.exam_id).subquery()
     )
-    out = []
-    for a, s in rows:
-        e = a.exam
-        out.append(
-            MyAssessment(
-                exam_id=e.id,
-                title=e.title,
-                duration_min=e.duration_min,
-                window_start=e.window_start,
-                window_end=e.window_end,
-                session_id=s.id if s else None,
-                session_status=s.status if s else None,
-            )
+    rows = db.execute(
+        select(
+            Exam.id,
+            Exam.title,
+            Exam.duration_min,
+            Exam.window_start,
+            Exam.window_end,
+            Course.name,
+            ExamSession.id,
+            ExamSession.status,
+            func.coalesce(q_counts.c.n, 0),
         )
-    return sorted(out, key=lambda m: m.window_start)
+        .select_from(ExamAssignment)
+        .join(Exam, Exam.id == ExamAssignment.exam_id)
+        .outerjoin(Course, Course.id == Exam.course_id)
+        .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
+        .outerjoin(q_counts, q_counts.c.exam_id == Exam.id)
+        .where(ExamAssignment.candidate_id == user.id)
+        .order_by(Exam.window_start.desc(), ExamAssignment.created_at.desc())
+    )
+    return [
+        MyAssessment(
+            exam_id=exam_id,
+            title=title,
+            duration_min=duration_min,
+            window_start=window_start,
+            window_end=window_end,
+            session_id=session_id,
+            session_status=session_status,
+            course_name=course_name or "Full Stack Development",
+            questions_count=n,
+        )
+        for exam_id, title, duration_min, window_start, window_end, course_name, session_id, session_status, n in rows
+    ]

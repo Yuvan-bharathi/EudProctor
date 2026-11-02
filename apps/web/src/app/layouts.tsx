@@ -12,7 +12,7 @@ export function usePageTitle(title: string) {
   const set = useContext(TitleContext);
   useEffect(() => {
     set(title);
-    document.title = `${title} · EduProctor`;
+    document.title = "EduProctor Intelligence";
   }, [set, title]);
 }
 

@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ from app.core.db import get_db
 from app.core.deps import mentor_only
 from app.models import Exam, ExamSession, IdentityCheck, User
 from app.models.proctoring import CandidateFlag, FlagReview, GlanceLog, ProctorEvent
+from app.proctoring import live
 from app.routers.exams import own_exam
 from app.routers.mentor import mentor_session
 
@@ -67,9 +68,10 @@ class ReviewIn(BaseModel):
     comment: str = Field(default="", max_length=500)
 
 
-def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
-    out: dict[uuid.UUID, dict[str, int]] = {
-        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0} for sid in session_ids
+def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
+    """Per session: glances by source, integrity alerts (total, high, and by type), flags after the limit."""
+    out: dict[uuid.UUID, dict[str, Any]] = {
+        sid: {"head": 0, "eyes": 0, "alerts": 0, "high": 0, "post_limit": 0, "by_type": {}} for sid in session_ids
     }
     if not session_ids:
         return out
@@ -79,28 +81,30 @@ def _counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[s
         .group_by(GlanceLog.session_id, GlanceLog.source)
     ):
         out[sid][src] = n
-    for sid, sev, n in db.execute(
-        select(ProctorEvent.session_id, ProctorEvent.severity, func.count())
+    for sid, ev_type, sev, n in db.execute(
+        select(ProctorEvent.session_id, ProctorEvent.type, ProctorEvent.severity, func.count())
         .where(ProctorEvent.session_id.in_(session_ids), ProctorEvent.type.not_in(LOOK_AWAY_TYPES))
-        .group_by(ProctorEvent.session_id, ProctorEvent.severity)
+        .group_by(ProctorEvent.session_id, ProctorEvent.type, ProctorEvent.severity)
     ):
         out[sid]["alerts"] += n
+        out[sid]["by_type"][ev_type] = out[sid]["by_type"].get(ev_type, 0) + n
         if sev == "high":
             out[sid]["high"] += n
+    for sid, n in db.execute(  # flagged incidents after the candidate reached max flags
+        select(CandidateFlag.session_id, func.count())
+        .where(CandidateFlag.session_id.in_(session_ids), CandidateFlag.flag_no.is_(None))
+        .group_by(CandidateFlag.session_id)
+    ):
+        out[sid]["post_limit"] = n
     return out
 
 
 def summary_for(db: Session, sess: ExamSession) -> Summary:
     c = _counts(db, [sess.id])[sess.id]
-    post_limit = db.scalar(
-        select(func.count())
-        .select_from(CandidateFlag)
-        .where(CandidateFlag.session_id == sess.id, CandidateFlag.flag_no.is_(None))
-    )
     return Summary(
         red_flags=min(sess.flag_count, sess.exam.max_flags),
         max_flags=sess.exam.max_flags,
-        post_limit=post_limit,
+        post_limit=c["post_limit"],
         head_glances=c["head"],
         eye_glances=c["eyes"],
         other_alerts=c["alerts"],
@@ -120,11 +124,12 @@ def session_details(
     items: list[TimelineItem] = []
     for e in db.scalars(select(ProctorEvent).where(ProctorEvent.session_id == sess.id)):
         flag_no = (e.payload or {}).get("flag_no")
+        flagged_tab = e.type == "TAB_SWITCH" and "flag_no" in (e.payload or {})  # tab switches raise red flags
         kind = (
             "red_flag"
-            if e.type == "LOOK_AWAY_FLAG"
+            if e.type == "LOOK_AWAY_FLAG" or (flagged_tab and flag_no)
             else "post_limit"
-            if e.type == "LOOK_AWAY_POST_LIMIT"
+            if e.type == "LOOK_AWAY_POST_LIMIT" or flagged_tab
             else "alert"
         )
         r = reviews.get(e.id)
@@ -246,9 +251,37 @@ class LiveRow(BaseModel):
     flag_limit_reached: bool
     head_glances: int
     eye_glances: int
-    other_alerts: int
+    other_alerts: int  # total integrity alerts; the breakdown is in alerts_by_type
     high_alerts: int
     open_identity_reviews: int
+    alerts_by_type: dict[str, int] = {}  # e.g. TAB_SWITCH, FACE_ABSENT, MULTIPLE_FACES, COPY_PASTE_ATTEMPT
+    post_limit: int = 0
+    started_at: datetime | None = None
+    looking_away: dict | None = None  # ongoing look-away right now (source, direction, duration_ms)
+    recent_alerts: list[dict] = []  # latest alerts, newest first
+
+
+def _live_row(s: ExamSession, u: User, exam: Exam, c: dict[str, Any], reviews: int) -> LiveRow:
+    ongoing, recent = live.snapshot(str(s.id))
+    return LiveRow(
+        session_id=s.id,
+        candidate_id=u.id,
+        candidate_name=u.name,
+        status=s.status.value,
+        flag_count=min(s.flag_count, exam.max_flags),
+        max_flags=exam.max_flags,
+        flag_limit_reached=s.flag_limit_reached,
+        head_glances=c["head"],
+        eye_glances=c["eyes"],
+        other_alerts=c["alerts"],
+        high_alerts=c["high"],
+        open_identity_reviews=reviews,
+        post_limit=c["post_limit"],
+        alerts_by_type=c["by_type"],
+        started_at=s.started_at,
+        looking_away=ongoing if s.status.value == "in_progress" else None,
+        recent_alerts=recent,
+    )
 
 
 @router.get("/exams/{exam_id}/live", response_model=list[LiveRow])
@@ -278,20 +311,4 @@ def exam_live(exam_id: uuid.UUID, db: Session = Depends(get_db), mentor: User = 
         if rows
         else {}
     )
-    return [
-        LiveRow(
-            session_id=s.id,
-            candidate_id=u.id,
-            candidate_name=u.name,
-            status=s.status.value,
-            flag_count=min(s.flag_count, exam.max_flags),
-            max_flags=exam.max_flags,
-            flag_limit_reached=s.flag_limit_reached,
-            head_glances=counts[s.id]["head"],
-            eye_glances=counts[s.id]["eyes"],
-            other_alerts=counts[s.id]["alerts"],
-            high_alerts=counts[s.id]["high"],
-            open_identity_reviews=reviews.get(s.id, 0),
-        )
-        for s, u in rows
-    ]
+    return [_live_row(s, u, exam, counts[s.id], reviews.get(s.id, 0)) for s, u in rows]

@@ -78,3 +78,5 @@ class MyAssessment(BaseModel):
     window_end: datetime
     session_id: uuid.UUID | None
     session_status: SessionStatus | None
+    course_name: str | None = None
+    questions_count: int = 0

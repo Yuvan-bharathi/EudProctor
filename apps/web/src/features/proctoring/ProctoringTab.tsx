@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Proctoring tab of the assessment workspace (mentor only).
  *
  * One card per candidate with their proctoring summary; a dropdown expands the full timeline with evidence and
@@ -6,8 +6,10 @@
  * It shows what the browser reports in real time (looking at the screen or away, direction, duration, camera
  * problems). No video is shown: video never leaves the candidate's browser (CLAUDE.md rule 6).
  *
- * Real data comes from the API; when an assessment has no sessions yet the workspace's sample data is shown,
- * clearly labelled.
+ * Real data comes from the API and is refreshed every few seconds, so it also works where the WebSocket cannot
+ * connect (e.g. behind a proxy without upgrade support); the WebSocket only makes updates instant. Assigned
+ * candidates without a session are listed as not started. Sample data is shown, clearly labelled, only for local
+ * demo assessments the API does not know.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -23,7 +25,6 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { GlanceChip, RedFlagChip, SeverityBadge, type LookSource } from "@/components/ProctorChips";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +52,11 @@ interface LiveRow {
   other_alerts: number;
   high_alerts: number;
   open_identity_reviews: number;
+  alerts_by_type?: Record<string, number>;
+  post_limit?: number;
+  started_at?: string | null;
+  looking_away?: { source?: LookSource; direction?: string; duration_ms?: number } | null;
+  recent_alerts?: LiveAlert[];
 }
 
 interface TimelineItem {
@@ -60,7 +66,7 @@ interface TimelineItem {
   type: string;
   severity: "high" | "medium" | "low";
   flag_no: number | null;
-  source: LookSource | null;
+  source: LookSource | "tab" | null;
   direction: string | null;
   started_at: string;
   exam_clock_ms: number | null;
@@ -81,7 +87,7 @@ interface LiveAlert {
   session_id: string;
   at?: string;
   flag_no?: number | null;
-  source?: LookSource;
+  source?: LookSource | "tab";
   direction?: string;
   duration_ms?: number;
   type?: string;
@@ -99,9 +105,11 @@ interface CandidateCard {
   flags: number;
   maxFlags: number;
   limitReached: boolean;
+  afterLimit: number;
   headGlances: number;
   eyeGlances: number;
   otherAlerts: number;
+  alertsByType: Record<string, number>;
   highAlerts: number;
   identityReviews: number;
   sample?: LiveCandidateRow;
@@ -116,8 +124,16 @@ function fromLive(r: LiveRow, emails: Map<string, string>): CandidateCard {
   const label = { live: "Taking the assessment", submitted: "Submitted", identity: "Verifying identity", closed: r.status.replace(/_/g, " "), not_started: "Not started" }[status];
   return {
     key: r.session_id, sessionId: r.session_id, name: r.candidate_name, email: emails.get(r.candidate_id) ?? "", status, statusLabel: label,
-    flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, headGlances: r.head_glances, eyeGlances: r.eye_glances,
-    otherAlerts: r.other_alerts, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
+    flags: r.flag_count, maxFlags: r.max_flags, limitReached: r.flag_limit_reached, afterLimit: r.post_limit ?? 0, headGlances: r.head_glances, eyeGlances: r.eye_glances,
+    otherAlerts: r.other_alerts, alertsByType: r.alerts_by_type ?? {}, highAlerts: r.high_alerts, identityReviews: r.open_identity_reviews,
+  };
+}
+
+function fromAssignment(a: Assignment): CandidateCard {
+  return {
+    key: `assignment-${a.id}`, sessionId: null, name: a.candidate_name, email: a.candidate_email, status: "not_started",
+    statusLabel: "Not started", flags: 0, maxFlags: 3, limitReached: false, afterLimit: 0, headGlances: 0, eyeGlances: 0, otherAlerts: 0, alertsByType: {},
+    highAlerts: 0, identityReviews: 0,
   };
 }
 
@@ -125,8 +141,8 @@ function fromSample(r: LiveCandidateRow): CandidateCard {
   const status = r.status === "In progress" ? "live" : r.status === "Completed" ? "submitted" : "not_started";
   return {
     key: r.id, sessionId: null, name: r.name, email: r.email, status, statusLabel: r.status === "In progress" ? "Taking the assessment" : r.status,
-    flags: r.flags, maxFlags: r.maxFlags, limitReached: false, headGlances: r.flags + 2, eyeGlances: r.isGlancing ? 4 : 1,
-    otherAlerts: r.status === "Not started" ? 0 : 1, highAlerts: 0, identityReviews: 0, sample: r,
+    flags: r.flags, maxFlags: r.maxFlags, limitReached: false, afterLimit: 0, headGlances: r.flags + 2, eyeGlances: r.isGlancing ? 4 : 1,
+    otherAlerts: r.status === "Not started" ? 0 : 1, alertsByType: r.status === "Not started" ? {} : { TAB_SWITCH: 1 }, highAlerts: 0, identityReviews: 0, sample: r,
   };
 }
 
@@ -246,7 +262,7 @@ function DecisionCell({ item, sessionId, examId }: { item: TimelineItem; session
 }
 
 function EventCell({ item }: { item: TimelineItem }) {
-  if (item.kind === "glance") return <GlanceChip source={item.source ?? "head"} />;
+  if (item.kind === "glance") return <GlanceChip source={item.source === "eyes" ? "eyes" : "head"} />;
   if (item.kind === "red_flag" || item.kind === "post_limit") return <RedFlagChip flagNo={item.flag_no} max={3} source={item.source ?? undefined} />;
   return (
     <span className="inline-flex items-center gap-2">
@@ -256,18 +272,119 @@ function EventCell({ item }: { item: TimelineItem }) {
   );
 }
 
-function RealDetails({ sessionId, examId }: { sessionId: string; examId: string }) {
-  const q = useQuery({ queryKey: ["proctoring-details", sessionId], queryFn: () => api<SessionDetails>(`/mentor/sessions/${sessionId}/details`) });
+// ---------- metric definitions (tooltips + legend). Thresholds are the platform defaults from server config ----------
+const METRIC_HELP = {
+  redFlags:
+    "Red flags shown to the candidate (max 3): looking away for 3 s or more, or leaving the assessment tab for more than 2 s. The candidate sees a calm notice; nothing is paused or submitted.",
+  afterLimit:
+    "Incidents that would have been a red flag but happened after the candidate already had 3. Recorded for you; the candidate is not notified again.",
+  headGlances: "Head turned away from the screen for 1 to under 3 s. Mentor-only; the candidate is never told.",
+  eyeGlances: "Eyes moved off the screen (head still facing it) for 1 to under 3 s. Mentor-only.",
+  longLookAways: "Look-aways of 3 s or more (head or eyes), whether they became a red flag or came after the limit.",
+  longest: "The single longest look-away in this attempt.",
+} as const;
+
+const ALERT_HELP: Record<string, string> = {
+  TAB_SWITCH:
+    "Left the assessment tab or window for more than 2 s (switched tab, another app, or devtools). Each one is also a red flag (or after limit).",
+  FACE_ABSENT: "No face in the camera for 3 s or more. Medium; High if it lasts over 30 s.",
+  MULTIPLE_FACES: "More than one face in the camera for 2 s or more. High; a snapshot is kept as evidence.",
+  COPY_PASTE_ATTEMPT: "Tried to copy, cut or paste. It was blocked and logged.",
+  FULLSCREEN_EXIT: "Left full-screen mode.",
+  CAMERA_UNAVAILABLE: "The camera stopped or permission was lost. The assessment continues.",
+  IDENTITY_MISMATCH: "A random identity check did not match the enrolled face.",
+  LIVENESS_FAIL: "The liveness check (blink / head turn) was not passed.",
+};
+
+/** Exact local date and time of an event, e.g. "31 Oct 2026, 6:14:03 pm". */
+function formatStamp(iso: string) {
+  return new Date(iso).toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function Metric({ label, value, help, className }: { label: string; value: string | number; help: string; className?: string }) {
+  return (
+    <span title={help} className={cn("cursor-help rounded-lg bg-surface-muted px-2.5 py-1 text-text", className)}>
+      {label} <strong>{value}</strong>
+    </span>
+  );
+}
+
+/** Per-candidate report: what was recorded, by meaning, above the full timeline. */
+function ReportSummary({ items }: { items: TimelineItem[] }) {
+  const count = (pred: (i: TimelineItem) => boolean) => items.filter(pred).length;
+  const lookAways = items.filter((i) => i.kind === "glance" || i.type.startsWith("LOOK_AWAY"));
+  const longest = Math.max(0, ...lookAways.map((i) => i.duration_ms));
+  const alerts = new Map<string, number>();
+  for (const i of items) if (i.item_type === "event" && !i.type.startsWith("LOOK_AWAY")) alerts.set(i.type, (alerts.get(i.type) ?? 0) + 1);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="font-semibold text-text">Report:</span>
+      <Metric label="Red flags (notified)" value={count((i) => i.kind === "red_flag")} help={METRIC_HELP.redFlags} className="bg-danger-50 text-danger-700" />
+      <Metric label="After limit" value={count((i) => i.kind === "post_limit")} help={METRIC_HELP.afterLimit} />
+      <Metric label="Look-aways ≥ 3 s" value={count((i) => i.type.startsWith("LOOK_AWAY"))} help={METRIC_HELP.longLookAways} />
+      <Metric label="Head glances" value={count((i) => i.kind === "glance" && i.source !== "eyes")} help={METRIC_HELP.headGlances} className="bg-info-50 text-info-700" />
+      <Metric label="Eye glances" value={count((i) => i.kind === "glance" && i.source === "eyes")} help={METRIC_HELP.eyeGlances} className="bg-info-50 text-info-700" />
+      {[...alerts.entries()].map(([type, n]) => (
+        <Metric key={type} label={eventLabel(type)} value={n} help={ALERT_HELP[type] ?? eventLabel(type)} className="bg-warning-50 text-warning-800" />
+      ))}
+      {longest > 0 && <Metric label="Longest look-away" value={formatDuration(longest)} help={METRIC_HELP.longest} />}
+    </div>
+  );
+}
+
+/** Plain-language definitions of every number on this tab. */
+function MetricsLegend() {
+  const rows: [string, string][] = [
+    ["Red flags", METRIC_HELP.redFlags],
+    ["After limit", METRIC_HELP.afterLimit],
+    ["Head glances", METRIC_HELP.headGlances],
+    ["Eye glances", METRIC_HELP.eyeGlances],
+    ...Object.entries(ALERT_HELP).map(([type, help]) => [eventLabel(type), help] as [string, string]),
+  ];
+  return (
+    <details className="rounded-xl border border-border bg-surface px-4 py-3 text-xs">
+      <summary className="cursor-pointer font-semibold text-text">What do these metrics mean?</summary>
+      <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+        {rows.map(([term, help]) => (
+          <div key={term}>
+            <dt className="font-semibold text-text">{term}</dt>
+            <dd className="text-muted">{help}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-muted">
+        Severity: <strong>High</strong> needs a look soon, <strong>Medium</strong> is worth checking, <strong>Low</strong> is informational. No signal
+        ever pauses, blocks or submits the assessment; you decide what each one means.
+      </p>
+    </details>
+  );
+}
+
+function RealDetails({ sessionId, examId, live }: { sessionId: string; examId: string; live: boolean }) {
+  const q = useQuery({
+    queryKey: ["proctoring-details", sessionId],
+    queryFn: () => api<SessionDetails>(`/mentor/sessions/${sessionId}/details`),
+    refetchInterval: live ? 5000 : false,
+  });
   if (q.isPending) return <LoadingState rows={3} label="Loading proctoring details" />;
   if (q.isError) return <ErrorState message="Could not load proctoring details." onRetry={() => q.refetch()} />;
   const items = q.data.timeline;
   if (items.length === 0)
     return <p className="flex items-center gap-2 text-sm text-text"><ShieldCheck className="size-4 text-success-700" aria-hidden="true" /> Nothing recorded for this candidate.</p>;
   return (
+    <div className="space-y-3">
+    <ReportSummary items={items} />
     <Table>
       <THead>
         <tr>
-          <TH>Time</TH>
+          <TH>Date & time</TH>
           <TH>Event</TH>
           <TH>Direction</TH>
           <TH>Duration</TH>
@@ -279,8 +396,11 @@ function RealDetails({ sessionId, examId }: { sessionId: string; examId: string 
       <TBody>
         {items.map((i) => (
           <TR key={i.id}>
-            <TD className="font-mono text-[13px]">
-              {i.exam_clock_ms !== null ? formatClock(i.exam_clock_ms) : new Date(i.started_at).toLocaleTimeString()}
+            <TD className="whitespace-nowrap">
+              <div className="text-[13px] text-text">{formatStamp(i.started_at)}</div>
+              {i.exam_clock_ms !== null && (
+                <div className="font-mono text-[11px] text-muted">{formatClock(i.exam_clock_ms)} into the assessment</div>
+              )}
             </TD>
             <TD><EventCell item={i} /></TD>
             <TD className="capitalize">{i.direction ?? "—"}</TD>
@@ -292,6 +412,7 @@ function RealDetails({ sessionId, examId }: { sessionId: string; examId: string 
         ))}
       </TBody>
     </Table>
+    </div>
   );
 }
 
@@ -335,7 +456,7 @@ function SampleDetails() {
 
 // ---------- Live Cam: live camera status (no video) ----------
 interface LiveState {
-  away?: { source?: LookSource; direction?: string; duration_ms?: number; at: number };
+  away?: { source?: LookSource | "tab"; direction?: string; duration_ms?: number; at: number };
   recent: LiveAlert[];
   cameraIssue?: boolean;
 }
@@ -421,8 +542,8 @@ function LiveCamPanel({ card, state, connected, onClose }: { card: CandidateCard
             <div className="text-lg font-semibold text-text">{card.headGlances + card.eyeGlances}</div>
           </div>
           <div className="rounded-lg bg-surface-muted p-2">
-            <div className="text-muted">Other alerts</div>
-            <div className="text-lg font-semibold text-text">{card.otherAlerts}</div>
+            <div className="text-muted">Left the tab</div>
+            <div className="text-lg font-semibold text-text">{card.alertsByType.TAB_SWITCH ?? 0}</div>
           </div>
         </div>
 
@@ -432,9 +553,9 @@ function LiveCamPanel({ card, state, connected, onClose }: { card: CandidateCard
             <ul className="space-y-1 text-sm">
               {state.recent.map((a, i) => (
                 <li key={i} className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-muted">{a.at ? new Date(a.at).toLocaleTimeString() : ""}</span>
+                  <span className="font-mono text-xs text-muted">{a.at ? formatStamp(a.at) : ""}</span>
                   {a.kind === "glance" ? (
-                    <GlanceChip source={a.source ?? "head"} durationMs={a.duration_ms} />
+                    <GlanceChip source={a.source === "eyes" ? "eyes" : "head"} durationMs={a.duration_ms} />
                   ) : a.kind === "red_flag" || a.kind === "post_limit" ? (
                     <RedFlagChip flagNo={a.flag_no ?? null} max={card.maxFlags} source={a.source} />
                   ) : (
@@ -478,44 +599,53 @@ function CandidateProctoringCard({
 }) {
   const panelId = `proctoring-${card.key}`;
   const awayNow = live?.away && Date.now() - live.away.at < 2500;
+  // the overview shows two numbers: red flags and the most frequent integrity alert; the rest is in Details
+  const [topType, topCount] = Object.entries(card.alertsByType).reduce<[string | null, number]>(
+    (best, [type, n]) => (n > best[1] ? [type, n] : best),
+    [null, 0],
+  );
+  const extraAlerts = Object.values(card.alertsByType).reduce((a, n) => a + n, 0) - topCount;
   return (
     <li className="rounded-xl border border-border bg-surface">
-      <div className="flex flex-wrap items-center gap-4 p-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 p-4 lg:flex-nowrap">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary-50 text-sm font-semibold text-primary-700" aria-hidden="true">
           {initials(card.name)}
         </span>
-        <div className="min-w-48 flex-1">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-text">{card.name}</span>
+            <span className="truncate font-semibold text-text">{card.name}</span>
             <Badge tone={statusBadge[card.status]}>
               {card.status === "live" && <Radio aria-hidden="true" />}
               {card.statusLabel}
             </Badge>
             {awayNow && <Badge tone="warning">Looking away now</Badge>}
+            {card.identityReviews > 0 && <Badge tone="warning"><AlertTriangle aria-hidden="true" /> Identity review</Badge>}
           </div>
-          {card.email && <div className="text-xs text-muted">{card.email}</div>}
+          {card.email && <div className="truncate text-xs text-muted">{card.email}</div>}
         </div>
-        <dl className="flex flex-wrap gap-2 text-xs">
-          <div className={cn("rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}>
+        <dl className="flex shrink-0 flex-wrap gap-2 text-xs">
+          <div
+            title={card.limitReached ? `${METRIC_HELP.redFlags}\n\n${METRIC_HELP.afterLimit}` : METRIC_HELP.redFlags}
+            className={cn("cursor-help whitespace-nowrap rounded-lg px-2.5 py-1", card.flags ? "bg-danger-50 text-danger-700" : "bg-surface-muted text-text")}
+          >
             <dt className="inline">Red flags </dt>
-            <dd className="inline font-semibold">{card.flags} / {card.maxFlags}</dd>
+            <dd className="inline font-semibold">
+              {card.flags} / {card.maxFlags}
+              {card.afterLimit > 0 && <span className="font-normal"> · +{card.afterLimit} after limit</span>}
+            </dd>
           </div>
-          <div className="rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
-            <dt className="inline">Head glances </dt>
-            <dd className="inline font-semibold">{card.headGlances}</dd>
+          <div
+            title={topType ? `${ALERT_HELP[topType] ?? eventLabel(topType)}${extraAlerts > 0 ? `\n\n+${extraAlerts} other alert(s): open Details for the breakdown.` : ""}` : "No integrity alerts recorded."}
+            className={cn("cursor-help whitespace-nowrap rounded-lg px-2.5 py-1", topType ? "bg-warning-50 text-warning-800" : "bg-surface-muted text-text")}
+          >
+            <dt className="inline">{topType ? `${eventLabel(topType)} ` : "Alerts "}</dt>
+            <dd className="inline font-semibold">
+              {topCount}
+              {extraAlerts > 0 && <span className="font-normal"> · +{extraAlerts} more</span>}
+            </dd>
           </div>
-          <div className="rounded-lg bg-info-50 px-2.5 py-1 text-info-700">
-            <dt className="inline">Eye glances </dt>
-            <dd className="inline font-semibold">{card.eyeGlances}</dd>
-          </div>
-          <div className="rounded-lg bg-surface-muted px-2.5 py-1 text-text">
-            <dt className="inline">Other alerts </dt>
-            <dd className="inline font-semibold">{card.otherAlerts}</dd>
-          </div>
-          {card.limitReached && <Badge tone="danger">Flag limit reached</Badge>}
-          {card.identityReviews > 0 && <Badge tone="warning"><AlertTriangle aria-hidden="true" /> Identity review</Badge>}
         </dl>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {card.status === "live" && (
             <Button size="sm" variant="secondary" onClick={onLiveCam}>
               <Camera aria-hidden="true" /> Live Cam
@@ -529,11 +659,12 @@ function CandidateProctoringCard({
       </div>
       {open && (
         <div id={panelId} className="space-y-3 border-t border-border p-4">
-          {card.sessionId ? <RealDetails sessionId={card.sessionId} examId={examId} /> : <SampleDetails />}
-          {card.sessionId && (
-            <Link to={`/mentor/sessions/${card.sessionId}`} className="inline-block text-sm text-primary-700 underline underline-offset-2">
-              Open full proctoring page
-            </Link>
+          {card.sessionId ? (
+            <RealDetails sessionId={card.sessionId} examId={examId} live={card.status === "live"} />
+          ) : card.sample ? (
+            <SampleDetails />
+          ) : (
+            <p className="text-sm text-muted">This candidate has not started the assessment yet.</p>
           )}
         </div>
       )}
@@ -546,8 +677,14 @@ const ORDER: Record<CandidateCard["status"], number> = { live: 0, identity: 1, s
 
 export function ProctoringTab({ examId, assignments }: { examId: string; assignments: Assignment[] }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["live", examId], queryFn: () => api<LiveRow[]>(`/mentor/exams/${examId}/live`), retry: false });
-  const real = (q.data?.length ?? 0) > 0;
+  // polled as well as pushed: the WebSocket cannot connect through every proxy
+  const q = useQuery({
+    queryKey: ["live", examId],
+    queryFn: () => api<LiveRow[]>(`/mentor/exams/${examId}/live`),
+    retry: false,
+    refetchInterval: 3000,
+  });
+  const real = Array.isArray(q.data);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [liveCam, setLiveCam] = useState<string | null>(null);
   const [live, setLive] = useState<Record<string, LiveState>>({});
@@ -585,9 +722,24 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
   if (q.isPending) return <LoadingState rows={4} label="Loading candidates" />;
 
   const emails = new Map(assignments.map((a) => [a.candidate_id, a.candidate_email]));
-  const cards = (real ? q.data!.map((r) => fromLive(r, emails)) : mockLiveCandidates.map(fromSample)).sort(
-    (a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name),
-  );
+  const rows = real ? q.data! : [];
+  const withSession = new Set(rows.map((r) => r.candidate_id));
+  const cards = (
+    real
+      ? [...rows.map((r) => fromLive(r, emails)), ...assignments.filter((a) => !withSession.has(a.candidate_id)).map(fromAssignment)]
+      : mockLiveCandidates.map(fromSample)
+  ).sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name));
+  // without the WebSocket, the polled rows carry the ongoing look-away and the latest alerts
+  const liveState = (key: string): LiveState | undefined => {
+    if (connected) return live[key];
+    const r = rows.find((x) => x.session_id === key);
+    if (!r) return live[key];
+    return {
+      away: r.looking_away ? { ...r.looking_away, at: Date.now() } : undefined, // the server already expires it
+      recent: r.recent_alerts ?? [],
+      cameraIssue: (r.recent_alerts ?? []).some((a) => a.type === "CAMERA_UNAVAILABLE"),
+    };
+  };
   const liveCount = cards.filter((c) => c.status === "live").length;
   const toggle = (key: string) =>
     setOpen((s) => {
@@ -609,10 +761,10 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {!real && <Badge tone="warning">Sample data · no candidate has opened this assessment yet</Badge>}
+          {!real && <Badge tone="warning">Sample data · this assessment is not on the server</Badge>}
           {real && (
             <span className="flex items-center gap-1.5 text-xs text-muted" role="status">
-              <Radio className="size-4" aria-hidden="true" /> {connected ? "Live" : "Connecting…"}
+              <Radio className="size-4" aria-hidden="true" /> {connected ? "Live" : "Live · refreshing every 3 s"}
             </span>
           )}
           {cards.length > 0 && (
@@ -622,6 +774,7 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
           )}
         </div>
       </div>
+      <MetricsLegend />
       {cards.length === 0 ? (
         <EmptyState message="No candidates yet. Assign candidates and send their links first." />
       ) : (
@@ -634,12 +787,12 @@ export function ProctoringTab({ examId, assignments }: { examId: string; assignm
               open={open.has(c.key)}
               onToggle={() => toggle(c.key)}
               onLiveCam={() => setLiveCam(c.key)}
-              live={live[c.key]}
+              live={liveState(c.key)}
             />
           ))}
         </ul>
       )}
-      {camCard && <LiveCamPanel card={camCard} state={live[camCard.key]} connected={connected} onClose={() => setLiveCam(null)} />}
+      {camCard && <LiveCamPanel card={camCard} state={liveState(camCard.key)} connected={connected || real} onClose={() => setLiveCam(null)} />}
     </div>
   );
 }

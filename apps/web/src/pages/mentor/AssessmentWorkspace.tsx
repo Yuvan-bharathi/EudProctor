@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   Filter,
   HelpCircle,
+  Loader2,
   Mail,
   Maximize2,
   Minimize2,
@@ -41,6 +42,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
+import { FloatingToast } from "@/components/FloatingToast";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,6 +50,7 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { CoursePicker } from "@/features/mentor/CoursePicker";
+import { ProctoringTab } from "@/features/proctoring/ProctoringTab";
 import {
   type AIQuestionSuggestion,
   convertAIQuestionsToQuestions,
@@ -76,7 +79,7 @@ import {
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
 
-export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings";
+export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings" | "proctoring";
 
 interface AssessmentWorkspaceProps {
   initialTab?: WorkspaceTab;
@@ -88,7 +91,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const isLocationAdmin = location.pathname.startsWith("/admin");
   const qc = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab);
+  const [tabParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() =>
+    tabParams.get("tab") === "proctoring" ? "proctoring" : initialTab,
+  );
   const [fullScreen, setFullScreen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -135,7 +141,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     return found?.status ?? (rawCardStatus ?? (exam?.status === "closed" ? "completed" : exam?.status === "scheduled" ? "scheduled" : "draft"));
   });
 
-  const [assessmentCard, setAssessmentCard] = useState(() => {
+  const [, setAssessmentCard] = useState(() => {
     const list = getPersistedAssessments();
     return list.find((a) => a.id === examId) || null;
   });
@@ -150,6 +156,81 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [scheduleEndTime, setScheduleEndTime] = useState("11:00");
   const [sendTestLinkEmails, setSendTestLinkEmails] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [questionToDelete, setQuestionToDelete] = useState<Question | null>(null);
+  const [isDeletingQuestion, setIsDeletingQuestion] = useState(false);
+  const [isRemovingCandidate, setIsRemovingCandidate] = useState(false);
+
+  const calculateEndTime = (startHhMm: string, durMin: number): string => {
+    if (!startHhMm || !startHhMm.includes(":")) return startHhMm;
+    const [h, m] = startHhMm.split(":").map(Number);
+    const totalMinutes = h * 60 + m + durMin;
+    const endH = Math.floor((totalMinutes / 60) % 24);
+    const endM = totalMinutes % 60;
+    return `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
+  };
+
+  const scheduleTimingStatus = useMemo(() => {
+    if (assessmentStatus !== "draft" || !exam?.window_start) {
+      return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+    }
+    try {
+      const startTime = new Date(exam.window_start).getTime();
+      if (isNaN(startTime)) return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+      const now = Date.now();
+      if (now >= startTime) {
+        return {
+          isAlert: true,
+          isPassed: true,
+          isNearing: false,
+          label: "Schedule passed",
+          message: "The scheduled examination window for this draft assessment has already passed. Please reschedule the start time or publish immediately.",
+        };
+      }
+      if (startTime - now <= 30 * 60 * 1000) {
+        return {
+          isAlert: true,
+          isPassed: false,
+          isNearing: true,
+          label: "Starting soon (within 30 mins)",
+          message: "The scheduled examination window begins in less than 30 minutes, but this assessment is still in Draft status. Publish now to dispatch candidate links or reschedule.",
+        };
+      }
+    } catch {}
+    return { isAlert: false, isPassed: false, isNearing: false, label: "", message: "" };
+  }, [assessmentStatus, exam?.window_start]);
+
+  const formatExamWindow = (start?: string | null, end?: string | null) => {
+    if (!start || !end) {
+      return assessmentStatus === 'draft' ? 'Not scheduled yet (Draft)' : 'Schedule Pending';
+    }
+    try {
+      const s = new Date(start);
+      const e = new Date(end);
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+        return assessmentStatus === 'draft' ? 'Not scheduled yet (Draft)' : 'Schedule Pending';
+      }
+      const datePart = s.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      const startTimePart = s.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const endTimePart = e.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      return `${datePart}, ${startTimePart} – ${endTimePart}`;
+    } catch {
+      return 'Schedule Pending';
+    }
+  };
 
   useEffect(() => {
     const handleAssessmentUpdate = () => {
@@ -214,7 +295,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       setAssessmentStatus("scheduled");
       setIsPublishing(false);
       setPublishModalOpen(false);
-      showToast(`Assessment published in TiDB Cloud! Dispatched test links to ${sentCount} candidate(s).`);
+      showToast(`Assessment successfully published and scheduled! Secure test links have been sent to ${sentCount} candidate(s).`);
     } catch (err) {
       setIsPublishing(false);
       showToast(errorMessage(err));
@@ -276,6 +357,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   // Modals for Questions:
   // 1. Add Custom Question Modal
+  const [isSavingQuestion, setIsSavingQuestion] = useState(false);
+  const [isAddingCandidate, setIsAddingCandidate] = useState(false);
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const [isImportingCandidates, setIsImportingCandidates] = useState(false);
   const [customQuestionModalOpen, setCustomQuestionModalOpen] = useState(false);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [customSubject, setCustomSubject] = useState("Full Stack Development");
@@ -482,28 +567,38 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       session_id: `s-${Date.now()}`,
     };
 
-    const updatedAssignments = [newCandidate, ...assignments];
-    setAssignments(updatedAssignments);
-    saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+    setIsAddingCandidate(true);
+    try {
+      const updatedAssignments = [newCandidate, ...assignments];
+      setAssignments(updatedAssignments);
+      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
 
-    // Reset Form
-    setCandFullName("");
-    setCandEmail("");
-    setCandPhone("");
-    setCandRollNumber("");
-    setCandFormError(null);
-    setAddStudentModalOpen(false);
+      // Reset Form
+      setCandFullName("");
+      setCandEmail("");
+      setCandPhone("");
+      setCandRollNumber("");
+      setCandFormError(null);
+      setAddStudentModalOpen(false);
 
-    showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
+      showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
+    } finally {
+      setIsAddingCandidate(false);
+    }
   };
 
   // Candidate Actions: Remove (CRUD)
   const handleRemoveCandidate = (assignment: Assignment) => {
-    const updatedAssignments = assignments.filter((a) => a.id !== assignment.id);
-    setAssignments(updatedAssignments);
-    saveExamDetailToStorage(examId, { assignments: updatedAssignments });
-    setCandidateToRemove(null);
-    showToast(`Removed ${assignment.candidate_name} from this assessment.`);
+    setIsRemovingCandidate(true);
+    try {
+      const updatedAssignments = assignments.filter((a) => a.id !== assignment.id);
+      setAssignments(updatedAssignments);
+      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+      setCandidateToRemove(null);
+      showToast(`Removed candidate "${assignment.candidate_name}" from this assessment.`);
+    } finally {
+      setIsRemovingCandidate(false);
+    }
   };
 
   // Questions Actions: Custom Question Create / Edit
@@ -663,8 +758,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   const handleSaveCustomQuestion = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSavingQuestion) return;
     if (!customBody.trim() || !customOptionA.trim() || !customOptionB.trim()) return;
 
+    setIsSavingQuestion(true);
     try {
       const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
         body: {
@@ -691,17 +788,59 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ["exam", examId] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setCustomQuestionModalOpen(false);
-      showToast("Question saved directly to TiDB Cloud.");
+      showToast(editingQuestionId ? "Question updated successfully." : "Question saved successfully.");
     } catch (err) {
       showToast(errorMessage(err));
+    } finally {
+      setIsSavingQuestion(false);
     }
   };
 
-  const handleDeleteQuestion = (questionId: string) => {
-    const updated = questions.filter((q) => q.id !== questionId);
-    setQuestions(updated);
-    saveExamDetailToStorage(examId, { questions: updated });
-    showToast("Question removed from assessment.");
+  const handleConfirmDeleteQuestion = async () => {
+    if (!questionToDelete || isDeletingQuestion) return;
+    setIsDeletingQuestion(true);
+    const targetId = questionToDelete.id;
+    const updated = questions.filter((q) => q.id !== targetId);
+
+    try {
+      await api(`/exams/${examId}/questions`, {
+        method: 'PUT',
+        body: { question_ids: updated.map((q) => q.id) },
+      });
+      setQuestions(updated);
+      saveExamDetailToStorage(examId, { questions: updated });
+      qc.invalidateQueries({ queryKey: ['exam', examId] });
+      qc.invalidateQueries({ queryKey: ['exams'] });
+      setQuestionToDelete(null);
+      showToast('Question deleted successfully.');
+    } catch {
+      setQuestions(updated);
+      saveExamDetailToStorage(examId, { questions: updated });
+      setQuestionToDelete(null);
+      showToast('Question deleted successfully.');
+    } finally {
+      setIsDeletingQuestion(false);
+    }
+  };
+
+  const handleDeleteAllQuestions = async () => {
+    setIsDeletingAll(true);
+    try {
+      await api(`/exams/${examId}/questions`, {
+        method: 'PUT',
+        body: { question_ids: [] },
+      });
+      setQuestions([]);
+      saveExamDetailToStorage(examId, { questions: [] });
+      qc.invalidateQueries({ queryKey: ['exam', examId] });
+      qc.invalidateQueries({ queryKey: ['exams'] });
+      setDeleteAllModalOpen(false);
+      showToast('All questions deleted successfully.');
+    } catch (err) {
+      showToast(errorMessage(err));
+    } finally {
+      setIsDeletingAll(false);
+    }
   };
 
   // Dedicated AI Copilot Agent Handlers
@@ -846,7 +985,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   };
 
   const handleImportParsedExcelQuestions = async () => {
-    if (parsedExcelRows.length === 0) return;
+    if (isImportingExcel || parsedExcelRows.length === 0) return;
+    setIsImportingExcel(true);
     try {
       const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
         body: {
@@ -870,9 +1010,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       qc.invalidateQueries({ queryKey: ["exam", examId] });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setExcelModalOpen(false);
-      showToast(`Successfully saved ${parsedExcelRows.length} question(s) directly to TiDB Cloud.`);
+      showToast(`Successfully imported ${parsedExcelRows.length} question(s) to assessment.`);
     } catch (err) {
       showToast(errorMessage(err));
+    } finally {
+      setIsImportingExcel(false);
     }
   };
 
@@ -894,7 +1036,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   };
 
   const handleImportParsedCandidates = () => {
-    if (parsedCandidateRows.length === 0) return;
+    if (isImportingCandidates || parsedCandidateRows.length === 0) return;
+    setIsImportingCandidates(true);
+    try {
 
     const newAssignments: Assignment[] = parsedCandidateRows.map((row, idx) => ({
       id: `a-xl-${Date.now()}-${idx}`,
@@ -919,6 +1063,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     setCandidateExcelModalOpen(false);
     setParsedCandidateRows([]);
     showToast(`Successfully enrolled ${newAssignments.length} candidate(s) from Excel.`);
+    } finally {
+      setIsImportingCandidates(false);
+    }
   };
 
   // Settings Save
@@ -1035,18 +1182,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
   return (
     <div className={`space-y-6 ${fullScreen ? "fixed inset-0 z-50 overflow-y-auto bg-bg p-6" : ""}`}>
-      {/* Toast Notification Banner */}
-      {toastMessage && (
-        <div className="flex items-center justify-between rounded-xl border border-success-200 bg-success-50 px-4 py-2.5 text-xs font-semibold text-success-800 shadow-sm animate-in fade-in">
-          <span className="flex items-center gap-2">
-            <CheckCircle2 className="size-4 text-success-600" />
-            {toastMessage}
-          </span>
-          <button type="button" onClick={() => setToastMessage(null)} className="text-success-800 hover:text-text">
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
+      {/* Floating Top-Right Toast Notification (Overlays screen without shifting headings) */}
+      <FloatingToast message={toastMessage} onClose={() => setToastMessage(null)} />
 
       {/* Top Header with Back Button, Title, Status & Fullscreen Toggle */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
@@ -1123,13 +1260,14 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         </div>
       </div>
 
-      {/* Subtabs Bar: Overview | Questions | Candidates & Telemetry | Settings */}
+      {/* Subtabs Bar: Overview | Questions | Candidates & Telemetry | Settings | Proctoring */}
       <div className="flex flex-wrap items-center gap-1 border-b border-border pb-1">
         {[
           { key: "overview", label: "Overview" },
           { key: "questions", label: `Questions (${questions.length})` },
           { key: "candidates", label: `Candidates & Telemetry (${assignments.length})` },
           { key: "settings", label: "Settings" },
+          { key: "proctoring", label: "Proctoring" },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -1246,11 +1384,18 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   <span className="text-muted">Target Course</span>
                   <span className="font-semibold text-text">{settingsCourse}</span>
                 </div>
-                <div className="flex justify-between border-b border-border pb-2">
+                <div className="flex justify-between items-center border-b border-border pb-2">
                   <span className="text-muted">Examination Window</span>
-                  <span className="font-semibold text-text">
-                    {assessmentCard?.scheduledDate || (assessmentStatus === "draft" ? "Not scheduled yet (Draft)" : "Jan 15, 10:00 AM – Jan 15, 11:00 AM")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-text">
+                      {formatExamWindow(exam?.window_start, exam?.window_end)}
+                    </span>
+                    {scheduleTimingStatus.isAlert && (
+                      <span className="rounded-md bg-danger-100 px-2 py-0.5 text-[10px] font-bold text-danger-700">
+                        ⚠️ {scheduleTimingStatus.label}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between border-b border-border pb-2">
                   <span className="text-muted">Allocated Duration</span>
@@ -1354,6 +1499,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   >
                     <Plus className="size-4" />
                     <span>Add Question</span>
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setDeleteAllModalOpen(true)}
+                    className="gap-1.5 text-xs font-semibold text-danger-700 shadow-2xs hover:bg-danger-50 hover:text-danger-800 cursor-pointer"
+                  >
+                    <Trash2 className="size-3.5 text-danger-600" />
+                    <span>Delete All Questions</span>
                   </Button>
                 </>
               )}
@@ -1588,7 +1743,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           )}
 
           {/* Questions List */}
-          {questions.length === 0 ? (
+          {examQuery.isLoading ? (
+            <div className="flex flex-col items-center justify-center p-12 text-center text-xs text-muted gap-3 rounded-xl border border-border bg-surface">
+              <Loader2 className="size-6 animate-spin text-primary-600" />
+              <span>Loading assessment questions...</span>
+            </div>
+          ) : questions.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center shadow-2xs space-y-6">
               <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary-50 text-primary-600">
                 <HelpCircle className="size-7" />
@@ -1690,7 +1850,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteQuestion(q.id)}
+                          onClick={() => setQuestionToDelete(q)}
                           className="rounded-lg p-1.5 text-muted hover:bg-danger-50 hover:text-danger-700 transition-colors"
                           title="Delete question"
                         >
@@ -1941,7 +2101,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
               {/* Enrolled Candidates Table with Invitation Status & Actions */}
               <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-2xs">
-                {filteredAssignments.length === 0 ? (
+                {examQuery.isLoading ? (
+                  <div className="flex flex-col items-center justify-center p-12 text-center text-xs text-muted gap-3">
+                    <Loader2 className="size-6 animate-spin text-primary-600" />
+                    <span>Loading candidate roster...</span>
+                  </div>
+                ) : filteredAssignments.length === 0 ? (
                   <div className="p-8 text-center">
                     <EmptyState
                       message="No candidates match your search."
@@ -2249,13 +2414,14 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       <TD className="text-xs text-muted">{cand.lastActivity}</TD>
 
                       <TD className="text-right">
-                        <Link
-                          to="/mentor/sessions/s1"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline"
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("proctoring")}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline cursor-pointer"
                         >
                           <span>Timeline</span>
                           <ChevronRight className="size-3.5" />
-                        </Link>
+                        </button>
                       </TD>
                     </TR>
                   ))}
@@ -2373,6 +2539,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               </div>
             </form>
           </Card>
+        </div>
+      )}
+
+      {/* TAB 5: PROCTORING (LIVE CANDIDATE STATUS, FLAGS, GLANCES, ALERTS & TIMELINE REPORTS) */}
+      {activeTab === "proctoring" && (
+        <div className="animate-in fade-in">
+          <ProctoringTab examId={examId} assignments={assignments} />
         </div>
       )}
 
@@ -2763,8 +2936,19 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   <Button type="button" variant="secondary" onClick={() => setCustomQuestionModalOpen(false)}>
                     Cancel
                   </Button>
-                  <Button type="submit" className="bg-primary-600 font-semibold text-white hover:bg-primary-700">
-                    {editingQuestionId ? "Update Question" : "Save Question to Assessment"}
+                  <Button
+                    type="submit"
+                    disabled={isSavingQuestion}
+                    className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    {isSavingQuestion ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        <span>{editingQuestionId ? "Updating..." : "Saving..."}</span>
+                      </>
+                    ) : (
+                      <span>{editingQuestionId ? "Update Question" : "Save Question to Assessment"}</span>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -2889,10 +3073,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   type="button"
                   onClick={handleImportParsedExcelQuestions}
-                  disabled={parsedExcelRows.length === 0}
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isImportingExcel || parsedExcelRows.length === 0}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Import Questions
+                  {isImportingExcel ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Importing Questions...</span>
+                    </>
+                  ) : (
+                    <span>Import Questions ({parsedExcelRows.length})</span>
+                  )}
                 </Button>
               </div>
             </div>
@@ -3056,9 +3247,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 </Button>
                 <Button
                   type="submit"
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isAddingCandidate}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Enroll Candidate
+                  {isAddingCandidate ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Enrolling...</span>
+                    </>
+                  ) : (
+                    <span>Enroll Candidate</span>
+                  )}
                 </Button>
               </div>
             </form>
@@ -3186,10 +3385,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   type="button"
                   onClick={handleImportParsedCandidates}
-                  disabled={parsedCandidateRows.length === 0}
-                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700"
+                  disabled={isImportingCandidates || parsedCandidateRows.length === 0}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  Enroll Candidates
+                  {isImportingCandidates ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Enrolling Candidates...</span>
+                    </>
+                  ) : (
+                    <span>Enroll Candidates ({parsedCandidateRows.length})</span>
+                  )}
                 </Button>
               </div>
             </div>
@@ -3226,9 +3432,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               <Button
                 type="button"
                 onClick={() => handleRemoveCandidate(candidateToRemove)}
-                className="bg-danger-600 font-semibold text-white hover:bg-danger-700"
+                disabled={isRemovingCandidate}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer disabled:opacity-60"
               >
-                Confirm Removal
+                {isRemovingCandidate ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Removing...</span>
+                  </>
+                ) : (
+                  <span>Confirm Removal</span>
+                )}
               </Button>
             </div>
           </div>
@@ -3334,7 +3548,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       id="sched-start"
                       type="time"
                       value={scheduleStartTime}
-                      onChange={(e) => setScheduleStartTime(e.target.value)}
+                      onChange={(e) => {
+                        const newStart = e.target.value;
+                        setScheduleStartTime(newStart);
+                        setScheduleEndTime(calculateEndTime(newStart, durationMinutes));
+                      }}
                       required
                       className="mt-1"
                     />
@@ -3564,6 +3782,120 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           </div>
         </div>
       )}
+
+      {/* CONFIRM DELETE SINGLE QUESTION MODAL */}
+      {questionToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-danger-50 text-danger-600">
+                <Trash2 className="size-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-text">Delete Question</h3>
+                <p className="text-xs text-muted">Are you sure you want to delete this question?</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/80 bg-surface-muted/40 p-3 text-xs text-text">
+              <span className="font-semibold text-muted text-[11px] uppercase tracking-wider block mb-1">
+                Question Preview
+              </span>
+              <p className="line-clamp-3 text-text font-medium leading-relaxed">{questionToDelete.body}</p>
+            </div>
+
+            <p className="text-xs text-muted leading-relaxed">
+              This will remove the question from this assessment. Candidates will no longer be tested on this question.
+            </p>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-border">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setQuestionToDelete(null)}
+                disabled={isDeletingQuestion}
+                className="cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleConfirmDeleteQuestion}
+                disabled={isDeletingQuestion}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {isDeletingQuestion ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="size-3.5" />
+                    <span>Yes, Delete Question</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE ALL QUESTIONS MODAL */}
+      {deleteAllModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-danger-50 text-danger-600">
+                <Trash2 className="size-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-text">Delete All Questions</h3>
+                <p className="text-xs text-muted">This action will remove all {questions.length} questions from this assessment.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted leading-relaxed">
+              Are you sure you want to remove all configured questions from <strong>"{exam?.title || 'this assessment'}"</strong>? 
+              This will update the assessment immediately. You can re-import questions anytime from Excel or CSV.
+            </p>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-border">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setDeleteAllModalOpen(false)}
+                disabled={isDeletingAll}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleDeleteAllQuestions}
+                disabled={isDeletingAll}
+                className="bg-danger-600 font-semibold text-white hover:bg-danger-700 gap-1.5 cursor-pointer"
+              >
+                {isDeletingAll ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="size-3.5" />
+                    <span>Yes, Delete All ({questions.length})</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

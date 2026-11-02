@@ -4,8 +4,10 @@ Every threshold the PRD names (glance/flag seconds, max flags, topic percentages
 read from the environment. Code must reference these settings, never literal numbers.
 """
 
+import json
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +20,26 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     chroma_url: str = "http://localhost:8001"
     web_base_url: str = "http://localhost:5173"
-    cors_origins: list[str] = ["http://localhost:5173"]
+    cors_origins: list[str] | str = ["http://localhost:5173"]
+
+    @field_validator("cors_origins", mode="after")
+    @classmethod
+    def parse_cors_origins(cls, v: object) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return ["*"]
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    loaded = json.loads(v)
+                    if isinstance(loaded, list):
+                        return [str(item).strip() for item in loaded if str(item).strip()]
+                except Exception:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return ["*"]
 
     jwt_secret: str = "change-me"
     jwt_access_minutes: int = 30

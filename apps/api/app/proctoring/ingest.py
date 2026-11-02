@@ -22,6 +22,7 @@ from app.core.config import get_settings
 from app.models import ExamSession, SessionStatus, SubmitReason
 from app.models.base import utcnow
 from app.models.proctoring import CandidateFlag, GlanceLog, ProctorEvent
+from app.proctoring import live
 from app.proctoring.bus import publish_alert
 from app.proctoring.policy import LookAwayClass, Policy, classify
 
@@ -279,6 +280,10 @@ def ingest(db: Session, sess: ExamSession, events: list[EventIn]) -> IngestResul
             res.accepted += 1  # below its threshold: not stored
             continue
         snap = _snapshot(ev.snapshot_b64) if severity == "high" else None
+        if ev.type == "TAB_SWITCH":
+            # leaving the assessment tab is a red flag like a long look-away: same counter, same cap
+            _tab_switch_flag(db, sess, policy, ev, severity, res)
+            continue
         db.add(
             ProctorEvent(
                 session_id=sess.id,
@@ -306,6 +311,61 @@ def ingest(db: Session, sess: ExamSession, events: list[EventIn]) -> IngestResul
     return res
 
 
+TAB_SOURCE = "tab"
+
+
+def _tab_switch_flag(
+    db: Session, sess: ExamSession, policy: Policy, ev: EventIn, severity: str, res: IngestResult
+) -> None:
+    """A tab switch over tab_switch_s raises red flag n (candidate notified) while flags < max, then post_limit.
+    The event keeps its TAB_SWITCH type so mentors see what happened; never changes session status."""
+    if sess.flag_count < policy.max_flags:
+        sess.flag_count += 1
+        flag_no: int | None = sess.flag_count
+        res.new_flags.append(sess.flag_count)
+    else:
+        flag_no = None
+        sess.flag_limit_reached = True
+    event = ProctorEvent(
+        session_id=sess.id,
+        client_event_id=ev.client_event_id,
+        type=ev.type,
+        severity=severity,
+        started_at=ev.started_at,
+        duration_ms=ev.duration_ms,
+        exam_clock_ms=ev.exam_clock_ms,
+        payload={"source": TAB_SOURCE, "flag_no": flag_no},
+    )
+    db.add(event)
+    db.flush()
+    db.add(
+        CandidateFlag(
+            session_id=sess.id,
+            event_id=event.id,
+            flag_no=flag_no,
+            source=TAB_SOURCE,
+            direction="away",
+            started_at=ev.started_at,
+            duration_ms=ev.duration_ms,
+            notified=flag_no is not None,
+        )
+    )
+    res.alerts.append(
+        {
+            "kind": "red_flag" if flag_no else "post_limit",
+            "session_id": str(sess.id),
+            "type": ev.type,
+            "flag_no": flag_no,
+            "flag_count": sess.flag_count,
+            "max_flags": policy.max_flags,
+            "source": TAB_SOURCE,
+            "duration_ms": ev.duration_ms,
+            "severity": severity,
+        }
+    )
+    res.accepted += 1
+
+
 def record_server_event(
     db: Session, sess: ExamSession, ev_type: str, payload: dict[str, Any]
 ) -> ProctorEvent:
@@ -325,4 +385,6 @@ def record_server_event(
 
 def publish_after_commit(sess: ExamSession, alerts: list[dict[str, Any]]) -> None:
     for a in alerts:
-        publish_alert(sess.exam_id, a | {"at": utcnow().isoformat()})
+        message = a | {"at": utcnow().isoformat()}
+        live.remember(message)
+        publish_alert(sess.exam_id, message)

@@ -16,11 +16,11 @@ export function GlanceChip({ source, durationMs }: { source: LookSource; duratio
 }
 
 /** Mentor-only red flag chip. flagNo null = recorded after the limit. */
-export function RedFlagChip({ flagNo, max, source }: { flagNo: number | null; max: number; source?: LookSource }) {
+export function RedFlagChip({ flagNo, max, source }: { flagNo: number | null; max: number; source?: LookSource | "tab" }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-danger-50 px-2 py-0.5 text-xs font-medium text-danger-700">
       {flagNo === null ? "After limit" : `Red flag ${flagNo} of ${max}`}
-      {source && <span className="font-normal">· {source}</span>}
+      {source && <span className="font-normal">· {source === "tab" ? "left the tab" : source}</span>}
     </span>
   );
 }

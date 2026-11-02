@@ -690,11 +690,11 @@ export function AdminDashboardPage() {
             {/* Actions */}
             <div className="flex items-center justify-between pt-2">
               <Link
-                to="/admin/sessions/s1"
+                to="/admin/exams"
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary-700 hover:underline"
                 onClick={() => setSelectedFlagSession(null)}
               >
-                <span>Open Full Integrity Timeline</span>
+                <span>Open assessment proctoring</span>
                 <ExternalLink className="size-3.5" />
               </Link>
               <div className="flex gap-2">

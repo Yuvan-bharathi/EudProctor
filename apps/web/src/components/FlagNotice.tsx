@@ -1,11 +1,11 @@
-﻿import { Eye } from "lucide-react";
+import { Eye } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 const AUTO_HIDE_MS = 5000;
 
 /** Neutral candidate notice for a new red flag. Polite live region, fades out, no sound/shake/modal. */
-export function FlagNotice({ flagNo, max }: { flagNo: number | null; max: number }) {
+export function FlagNotice({ flagNo, max, reason = "look" }: { flagNo: number | null; max: number; reason?: "look" | "tab" }) {
   const [visible, setVisible] = useState(false);
   const valid = flagNo !== null && flagNo >= 1 && flagNo <= max;
 
@@ -32,7 +32,9 @@ export function FlagNotice({ flagNo, max }: { flagNo: number | null; max: number
           >
             <Eye className="size-4" aria-hidden="true" />
             {/* text stays during the fade-out; hidden from assistive tech once faded */}
-            <span aria-hidden={!visible}>Flag {flagNo} of {max} – please keep your eyes on the screen.</span>
+            <span aria-hidden={!visible}>
+              Flag {flagNo} of {max} – {reason === "tab" ? "please stay on the assessment tab." : "please keep your eyes on the screen."}
+            </span>
           </div>
         )}
       </div>

@@ -584,9 +584,16 @@ export const mockCandidateDashboard = {
     title: "Unit test 1 - Basics",
     course: "Backend",
     score: 82,
+    classAverage: 76,
+    integrityBadge: "100% Academic Integrity Verified",
     status: "Published",
     publishedDate: "12 Jan 2026",
   },
+  practiceTopicsList: [
+    { id: "t1", name: "Core Architecture & Concepts", questions: 24 },
+    { id: "t2", name: "Applied Frameworks & Tooling", questions: 32 },
+    { id: "t3", name: "Performance, Security & Scale", questions: 18 },
+  ],
 };
 
 export interface TopicMasteryItem {
@@ -3006,9 +3013,9 @@ const APP_MODULE_KEY = "eduproctor_active_module";
 export type AppModuleMode = "interview" | "internship";
 
 export function getActiveAppModule(): AppModuleMode {
-  if (typeof window === "undefined") return "internship";
+  if (typeof window === "undefined") return "interview";
   const stored = localStorage.getItem(APP_MODULE_KEY);
-  return (stored as AppModuleMode) || "internship";
+  return (stored as AppModuleMode) || "interview";
 }
 
 export function setActiveAppModule(mode: AppModuleMode) {

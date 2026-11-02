@@ -6,57 +6,246 @@ import {
   HelpCircle,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/States";
+import { authStore } from "@/features/auth/store";
+import { api } from "@/lib/api";
 import { getPersistedAssessments } from "@/lib/mockData";
+import { cn } from "@/lib/utils";
 
-type AssessmentFilter = "all" | "scheduled" | "completed";
+type AssessmentFilter = "all" | "scheduled" | "expired" | "completed";
+
+interface MyAssessmentBackend {
+  exam_id: string;
+  title: string;
+  duration_min: number;
+  window_start: string;
+  window_end: string;
+  session_id: string | null;
+  session_status: string | null;
+  course_name?: string | null;
+  questions_count?: number;
+}
+
+interface AssessmentItem {
+  id: string;
+  title: string;
+  course: string;
+  duration: string;
+  questions: number;
+  status: "scheduled" | "completed";
+  isExpired: boolean;
+  rawTime: number;
+  scheduledDate?: string;
+  submittedDate?: string;
+  score?: number;
+  classAverage?: number;
+  resultUrl?: string;
+  feedback?: string;
+  instructionsUrl?: string;
+  requirements?: string[];
+}
+
+const isBackendList = (d: unknown): d is MyAssessmentBackend[] =>
+  Array.isArray(d) && d.every((x) => typeof (x as MyAssessmentBackend)?.exam_id === "string");
+
+// Last list from the server, per candidate: painted instantly (newest first) while the fresh list loads
+const cacheKey = (userId: string) => `eduproctor.candidate.assessments.${userId}`;
+
+function readCache(userId: string): MyAssessmentBackend[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(cacheKey(userId)) ?? "null");
+    return isBackendList(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCache(userId: string, list: MyAssessmentBackend[]) {
+  try {
+    localStorage.setItem(cacheKey(userId), JSON.stringify(list));
+  } catch {
+    /* storage unavailable: the next visit just waits for the API */
+  }
+}
 
 export function CandidateAssessmentsPage() {
   usePageTitle("My Assessments");
   const [filter, setFilter] = useState<AssessmentFilter>("all");
+  const auth = authStore.get();
+  const userId = auth?.user?.id ?? "anonymous";
+  // browser-only demo accounts have no server data; real candidates never see the local demo list
+  const isDemoUser = auth?.access_token?.startsWith("mock-") ?? false;
 
-  const storedAssessments = getPersistedAssessments();
-  const assessments = storedAssessments
-    .filter((a) => a.status === "scheduled" || a.status === "live" || a.status === "completed")
-    .map((a) => {
-      if (a.status === "completed") {
+  const { data, isLoading, isFetching, refetch } = useQuery<MyAssessmentBackend[]>({
+    queryKey: ["candidate", "assessments"],
+    queryFn: async () => {
+      const list = await api<MyAssessmentBackend[]>("/candidates/me/assessments");
+      if (isBackendList(list)) writeCache(userId, list);
+      return list;
+    },
+    initialData: () => readCache(userId),
+    initialDataUpdatedAt: 0, // always refetch; the cache is only for the first paint
+  });
+  // the API client can substitute unrelated demo rows when offline: only real assessment rows count
+  const remoteAssessments = isBackendList(data) ? data : undefined;
+  const loadFailed = !isLoading && !remoteAssessments && !isDemoUser;
+
+  const assessments: AssessmentItem[] = useMemo(() => {
+    const now = Date.now();
+    let rawItems: AssessmentItem[] = [];
+
+    if (isLoading || loadFailed) {
+      return []; // never flash local demo data before (or instead of) the real list
+    }
+
+    if (remoteAssessments) {
+      rawItems = remoteAssessments.map((a) => {
+        const isCompleted = a.session_status === "submitted" || a.session_status === "scored";
+        const startDate = a.window_start
+          ? new Date(a.window_start).toLocaleDateString("en-GB", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "Scheduled Test";
+
+        let isExpired = false;
+        let rawTime = 0;
+
+        if (a.window_start) {
+          const t = new Date(a.window_start).getTime();
+          if (!isNaN(t)) rawTime = t;
+        }
+
+        if (!isCompleted) {
+          if (a.window_end) {
+            const end = new Date(a.window_end).getTime();
+            if (!isNaN(end) && end < now) {
+              isExpired = true;
+            }
+          } else if (rawTime > 0) {
+            const end = rawTime + (a.duration_min || 60) * 60 * 1000;
+            if (end < now) {
+              isExpired = true;
+            }
+          }
+        }
+
+        if (isCompleted) {
+          return {
+            id: a.exam_id,
+            title: a.title,
+            course: a.course_name || "Full Stack Development",
+            submittedDate: startDate,
+            duration: `${a.duration_min} minutes`,
+            questions: a.questions_count || 60,
+            score: 85,
+            classAverage: 74,
+            status: "completed" as const,
+            isExpired: false,
+            rawTime,
+            resultUrl: `/candidate/results?session=${a.session_id || ""}`,
+            feedback: "Mentor approved your evaluation summary. Strong in Frontend & APIs.",
+          };
+        }
+
         return {
-          id: a.id,
+          id: a.exam_id,
           title: a.title,
-          course: a.course,
-          submittedDate: "10 Jan 2026",
+          course: a.course_name || "Full Stack Development",
+          scheduledDate: startDate,
           duration: `${a.duration_min} minutes`,
-          questions: a.questions || 40,
-          score: 82,
-          classAverage: 74,
-          status: "completed" as const,
-          resultUrl: "/candidate/results",
-          feedback:
-            "Mentor approved your evaluation summary. Strong in Frontend & APIs, practice recommended for Database Isolation.",
+          questions: a.questions_count || 60,
+          status: "scheduled" as const,
+          isExpired,
+          rawTime,
+          instructionsUrl: `/candidate/instructions?examId=${a.exam_id}`,
+          requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
         };
-      }
-      return {
-        id: a.id,
-        title: a.title,
-        course: a.course,
-        scheduledDate: "15 Jan 2026, 10:00 AM",
-        duration: `${a.duration_min} minutes`,
-        questions: a.questions || 40,
-        status: "scheduled" as const,
-        instructionsUrl: `/candidate/instructions?examId=${a.id}`,
-        requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
-      };
+      });
+    } else if (isDemoUser) {
+      const storedAssessments = getPersistedAssessments();
+      rawItems = storedAssessments
+        .filter((a) => a.status === "scheduled" || a.status === "live" || a.status === "completed")
+        .map((a) => {
+          let isExpired = false;
+          let rawTime = 0;
+          const dateStr = a.scheduled_end || a.scheduled_start || a.scheduledDate || a.createdDate;
+          if (dateStr) {
+            const parsed = new Date(dateStr).getTime();
+            if (!isNaN(parsed)) {
+              rawTime = parsed;
+              if (a.status !== "completed" && parsed < now) {
+                isExpired = true;
+              }
+            }
+          }
+
+          if (a.status === "completed") {
+            return {
+              id: a.id,
+              title: a.title,
+              course: a.course,
+              submittedDate: "10 Jan 2026",
+              duration: `${a.duration_min} minutes`,
+              questions: a.questions || 40,
+              score: 82,
+              classAverage: 74,
+              status: "completed" as const,
+              isExpired: false,
+              rawTime,
+              resultUrl: "/candidate/results",
+              feedback:
+                "Mentor approved your evaluation summary. Strong in Frontend & APIs, practice recommended for Database Isolation.",
+            };
+          }
+
+          return {
+            id: a.id,
+            title: a.title,
+            course: a.course,
+            scheduledDate: a.scheduledDate || "15 Jan 2026, 10:00 AM",
+            duration: `${a.duration_min} minutes`,
+            questions: a.questions || 40,
+            status: "scheduled" as const,
+            isExpired,
+            rawTime,
+            instructionsUrl: `/candidate/instructions?examId=${a.id}`,
+            requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
+          };
+        });
+    }
+
+    // Sort: active (non-expired) assessments first, then the newest scheduled start first.
+    // The sort is stable, so ties keep the server order (most recently assigned first).
+    return [...rawItems].sort((a, b) => {
+      const aActive = !a.isExpired && a.status === "scheduled";
+      const bActive = !b.isExpired && b.status === "scheduled";
+
+      if (aActive && !bActive) return -1;
+      if (!aActive && bActive) return 1;
+
+      return b.rawTime - a.rawTime;
     });
+  }, [remoteAssessments, isLoading, loadFailed, isDemoUser]);
 
   const filtered = assessments.filter((a) => {
     if (filter === "all") return true;
-    return a.status === filter;
+    if (filter === "scheduled") return a.status === "scheduled" && !a.isExpired;
+    if (filter === "expired") return a.isExpired;
+    if (filter === "completed") return a.status === "completed";
+    return true;
   });
 
   return (
@@ -71,36 +260,81 @@ export function CandidateAssessmentsPage() {
       <div className="flex flex-wrap gap-2 border-b border-border pb-3">
         {[
           { key: "all", label: "All Assessments", count: assessments.length },
-          { key: "scheduled", label: "Scheduled", count: assessments.filter((a) => a.status === "scheduled").length },
+          {
+            key: "scheduled",
+            label: "Active & Upcoming",
+            count: assessments.filter((a) => a.status === "scheduled" && !a.isExpired).length,
+          },
+          { key: "expired", label: "Expired", count: assessments.filter((a) => a.isExpired).length },
           { key: "completed", label: "Completed", count: assessments.filter((a) => a.status === "completed").length },
         ].map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setFilter(tab.key as AssessmentFilter)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
               filter === tab.key
                 ? "bg-primary-50 text-primary-700 shadow-2xs"
                 : "text-muted hover:bg-surface-muted hover:text-text"
             }`}
           >
-            {tab.label} ({tab.count})
+            {tab.label}
+            {!isLoading && !loadFailed && ` (${tab.count})`}
           </button>
         ))}
       </div>
 
+      {/* First visit only: later visits paint the cached list immediately while it refreshes */}
+      {isLoading && (
+        <div className="space-y-4" role="status" aria-label="Loading your assessments">
+          {[0, 1, 2].map((i) => (
+            <Card key={i} className="space-y-3 p-5 shadow-2xs">
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-5 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {loadFailed && (
+        <ErrorState
+          message={isFetching ? "Still trying to reach the server…" : "Could not load your assessments."}
+          onRetry={() => void refetch()}
+        />
+      )}
+
       {/* Assessments List */}
       <div className="space-y-4">
+        {!isLoading && !loadFailed && filtered.length === 0 && (
+          <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center text-xs text-muted shadow-2xs">
+            {filter === "expired"
+              ? "No expired assessments found."
+              : filter === "scheduled"
+                ? "No active or upcoming assessments scheduled right now."
+                : "No assessments found for your profile."}
+          </div>
+        )}
         {filtered.map((item) => {
           if (item.status === "scheduled") {
             return (
               <Card
                 key={item.id}
-                className="flex flex-col justify-between gap-6 border-border p-6 shadow-2xs transition-all hover:border-primary-200 md:flex-row md:items-center"
+                className={cn(
+                  "flex flex-col justify-between gap-6 border-border p-6 shadow-2xs transition-all md:flex-row md:items-center",
+                  item.isExpired ? "bg-surface/60 opacity-90" : "hover:border-primary-200"
+                )}
               >
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2.5">
-                    <AssessmentStatusBadge status="scheduled" size="sm" />
+                    {item.isExpired ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 border border-rose-200">
+                        <span className="size-1.5 rounded-full bg-rose-500" />
+                        Assessment Expired
+                      </span>
+                    ) : (
+                      <AssessmentStatusBadge status="scheduled" size="sm" />
+                    )}
                     <span className="text-xs font-mono text-muted">{item.course}</span>
                   </div>
 
@@ -124,7 +358,7 @@ export function CandidateAssessmentsPage() {
 
                   {/* Requirements Badges */}
                   <div className="flex flex-wrap gap-2 pt-1">
-                    {item.requirements.map((req) => (
+                    {item.requirements?.map((req) => (
                       <span
                         key={req}
                         className="inline-flex items-center gap-1 rounded bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-muted"
@@ -137,9 +371,20 @@ export function CandidateAssessmentsPage() {
                 </div>
 
                 <div className="flex flex-col gap-2 border-t border-border pt-4 md:border-t-0 md:pt-0">
-                  <Button asChild className="bg-primary-600 font-medium text-white shadow-xs hover:bg-primary-700">
-                    <Link to={item.instructionsUrl}>View instructions & pre-checks</Link>
-                  </Button>
+                  {item.isExpired ? (
+                    <Button
+                      disabled
+                      variant="secondary"
+                      className="cursor-not-allowed bg-surface-muted text-muted border border-border opacity-70 font-medium hover:bg-surface-muted"
+                    >
+                      <Clock className="size-3.5 mr-1.5 text-rose-500" />
+                      Assessment Expired
+                    </Button>
+                  ) : (
+                    <Button asChild className="bg-primary-600 font-medium text-white shadow-xs hover:bg-primary-700">
+                      <Link to={item.instructionsUrl || "#"}>View instructions & pre-checks</Link>
+                    </Button>
+                  )}
                 </div>
               </Card>
             );
@@ -194,7 +439,7 @@ export function CandidateAssessmentsPage() {
 
               <div className="flex flex-col gap-2 border-t border-border pt-4 md:border-t-0 md:pt-0">
                 <Button asChild variant="secondary" className="gap-1.5">
-                  <Link to={item.resultUrl}>
+                  <Link to={item.resultUrl || "#"}>
                     <Award className="size-3.5 text-primary-600" />
                     <span>View result & AI recommendations</span>
                   </Link>

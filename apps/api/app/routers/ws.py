@@ -13,6 +13,7 @@ from app.core.db import SessionLocal, get_engine
 from app.core.security import decode_token
 from app.models import Exam, Role, User
 from app.proctoring.bus import channel, get_bus
+from app.routers.courses import mentor_course_ids
 
 router = APIRouter(tags=["live"])
 
@@ -40,7 +41,11 @@ def _authorised(ticket: str, exam_id: uuid.UUID) -> bool:
         user = db.get(User, uuid.UUID(payload["sub"]))
         exam = db.get(Exam, exam_id)
         return bool(
-            user and user.is_active and user.role == Role.mentor and exam and exam.mentor_id == user.id
+            user
+            and user.is_active
+            and user.role == Role.mentor
+            and exam
+            and (exam.mentor_id == user.id or exam.course_id in mentor_course_ids(db, user))
         )
 
 

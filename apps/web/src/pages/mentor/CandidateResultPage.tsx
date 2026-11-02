@@ -1,6 +1,6 @@
-﻿import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, CircleX } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { TopicAverageChart } from "@/components/charts";
 import { StatCard } from "@/components/StatCard";
@@ -68,12 +68,7 @@ export function CandidateResultPage() {
     <QueryState query={q} emptyMessage="">
       {(r) => (
         <div className="space-y-6">
-          <p className="text-sm text-text">
-            {r.exam_title} ·{" "}
-            <Link className="text-primary-700 underline underline-offset-2" to={`/mentor/sessions/${r.session_id}`}>
-              proctoring details
-            </Link>
-          </p>
+          <p className="text-sm text-text">{r.exam_title}</p>
           <ResultSummary r={r} />
           {r.misconceptions.length > 0 && (
             <Card className="space-y-2">

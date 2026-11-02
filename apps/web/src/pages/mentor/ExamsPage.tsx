@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart2,
+  Loader2,
   Calendar,
   Clock,
   Eye,
@@ -16,12 +17,12 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
+import { FloatingToast } from "@/components/FloatingToast";
 import { ErrorState } from "@/components/States";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { CoursePicker } from "@/features/mentor/CoursePicker";
 import { api, errorMessage } from "@/lib/api";
-import { mockAssessments, saveAssessmentToStorage } from "@/lib/mockData";
 import type { Exam } from "@/lib/types";
 
 function localInput(d: Date) {
@@ -60,9 +61,37 @@ export function ExamsPage() {
   const [title, setTitle] = useState("");
   const [duration, setDuration] = useState(60);
   const [start, setStart] = useState(localInput(now));
-  const [end, setEnd] = useState(localInput(new Date(now.getTime() + 7 * 864e5)));
+  const [end, setEnd] = useState(localInput(new Date(now.getTime() + 60 * 60 * 1000)));
+
+  function handleStartChange(newStart: string) {
+    setStart(newStart);
+    try {
+      const s = new Date(newStart);
+      if (!isNaN(s.getTime())) {
+        const calculatedEnd = new Date(s.getTime() + duration * 60 * 1000);
+        setEnd(localInput(calculatedEnd));
+      }
+    } catch {}
+  }
+
+  function handleDurationChange(newDur: number) {
+    setDuration(newDur);
+    try {
+      const s = new Date(start);
+      if (!isNaN(s.getTime())) {
+        const calculatedEnd = new Date(s.getTime() + newDur * 60 * 1000);
+        setEnd(localInput(calculatedEnd));
+      }
+    } catch {}
+  }
   const [threshold, setThreshold] = useState(3);
   const [shuffle, setShuffle] = useState(true);
+
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
 
   const examsQuery = useQuery({
     queryKey: ["exams"],
@@ -96,6 +125,7 @@ export function ExamsPage() {
     },
     onSuccess: (exam) => {
       qc.invalidateQueries({ queryKey: ["exams"] });
+      showToast("Assessment created successfully!");
       setModalOpen(false);
       navigate(`${baseExamPath}/${exam.id}`);
     },
@@ -133,6 +163,8 @@ export function ExamsPage() {
       createdBy,
       createdDate,
       targetRole: courseName,
+      window_start: e.window_start,
+      window_end: e.window_end,
     };
   });
 
@@ -143,6 +175,9 @@ export function ExamsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Floating Top-Right Toast Notification (Overlays screen without shifting headings) */}
+      <FloatingToast message={toastMessage} onClose={() => setToastMessage(null)} />
+
       {/* Top Header: Title & "+ Create assessment" button */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
@@ -191,7 +226,12 @@ export function ExamsPage() {
 
       {/* Cards List Layout matching Screen 2 */}
       <div className="space-y-3">
-        {filteredAssessments.length === 0 ? (
+        {examsQuery.isLoading ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface p-12 text-center text-xs text-muted gap-3 shadow-xs">
+            <Loader2 className="size-6 animate-spin text-primary-600" />
+            <span className="font-medium">Loading assessments...</span>
+          </div>
+        ) : filteredAssessments.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted">
             No assessments found in this status.
           </div>
@@ -392,7 +432,7 @@ export function ExamsPage() {
                     type="number"
                     min={1}
                     value={duration}
-                    onChange={(e) => setDuration(+e.target.value)}
+                    onChange={(e) => handleDurationChange(+e.target.value)}
                   />
                 </div>
                 <div>
@@ -412,7 +452,7 @@ export function ExamsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="modal-start">Window Opens</Label>
-                  <Input id="modal-start" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
+                  <Input id="modal-start" type="datetime-local" value={start} onChange={(e) => handleStartChange(e.target.value)} />
                 </div>
                 <div>
                   <Label htmlFor="modal-end">Window Closes</Label>
@@ -436,8 +476,19 @@ export function ExamsPage() {
                 <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={!title.trim() || create.isPending}>
-                  {create.isPending ? "Creating..." : "Create assessment"}
+                <Button
+                  type="submit"
+                  disabled={!title.trim() || create.isPending}
+                  className="bg-primary-600 hover:bg-primary-700 text-white gap-1.5 font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  {create.isPending ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      <span>Creating Assessment...</span>
+                    </>
+                  ) : (
+                    <span>Create assessment</span>
+                  )}
                 </Button>
               </div>
             </form>

@@ -1,4 +1,4 @@
-﻿import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { FlagCounter } from "@/components/FlagCounter";
 import { FlagNotice } from "@/components/FlagNotice";
@@ -14,58 +14,80 @@ import { type FrameSignals, loadCalibration } from "./signals";
 import { EventUploader } from "./uploader";
 import { startVision, type VisionSource } from "./visionSource";
 
+/** Why the latest red flag was raised: a long look-away or leaving the assessment tab. */
+export type FlagReason = "look" | "tab";
+const TAB_NOTICE_WINDOW_MS = 10_000;
+
 /**
- * Candidate-side proctoring. Shows only the small flag counter and the neutral notice. Video stays in the
- * browser; only events (and a small snapshot for a red flag) are uploaded. Nothing here pauses or submits.
+ * Candidate-side proctoring engine: camera + face landmarks, look-away / face / tab-switch detection and the event
+ * uploader. Returns only the candidate's own flag counter and the latest new flag number for the neutral notice.
+ * Video stays in the browser; only events (and a small snapshot for a red flag) are uploaded. Nothing here pauses
+ * or submits. Pass `null` (no backend session) to keep it idle. Render a hidden <video> with the returned ref.
  */
-export function ProctoringLayer({ session }: { session: CandidateSession }) {
+export function useProctoring(session: CandidateSession | null) {
+  const sessionId = session?.id ?? null;
   const cfg = useQuery({
-    queryKey: ["proctoring-config", session.id],
-    queryFn: () => api<ProctoringConfig>(`/sessions/${session.id}/proctoring-config`),
+    queryKey: ["proctoring-config", sessionId],
+    queryFn: () => api<ProctoringConfig>(`/sessions/${sessionId}/proctoring-config`),
     staleTime: Infinity,
+    enabled: sessionId !== null,
   });
-  const max = cfg.data?.max_flags ?? session.max_flags;
-  const [count, setCount] = useState(Math.min(session.flag_count, max));
+  const max = cfg.data?.max_flags ?? session?.max_flags ?? 3;
+  const [count, setCount] = useState(Math.min(session?.flag_count ?? 0, max));
   const [notice, setNotice] = useState<number | null>(null);
-  const noticed = useRef(session.flag_count);
+  const [noticeReason, setNoticeReason] = useState<FlagReason>("look");
+  const noticed = useRef(session?.flag_count ?? 0);
   const video = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const config = cfg.data;
     const el = video.current;
-    if (!config || !el) return;
+    if (!session || !config || !el) return;
+    const s = session; // non-null inside the closures below
     let stream: MediaStream | null = null;
     let vision: VisionSource | null = null;
     let stopIntegrity: (() => void) | null = null;
     let identityTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSignals: FrameSignals | null = null;
     let cancelled = false;
-    let current = Math.min(session.flag_count, config.max_flags);
-    const examStart = session.started_at ? new Date(session.started_at).getTime() : Date.now();
+    let current = Math.min(s.flag_count, config.max_flags);
+    setCount(current); // the session may arrive after the first render (e.g. resuming with earlier flags)
+    noticed.current = Math.max(noticed.current, s.flag_count);
+    const examStart = s.started_at ? new Date(s.started_at).getTime() : Date.now();
 
-    const showNotice = (n: number) => {
+    let lastTabSwitchAt = 0;
+    const showNotice = (n: number, reason: FlagReason) => {
       if (n > noticed.current && n <= config.max_flags) {
         noticed.current = n;
         setNotice(n);
+        setNoticeReason(reason);
       }
     };
     const onStatus = (fs: FlagStatus) => {
       current = reconcileCount(current, fs);
       setCount(current);
       monitor.syncFlagCount(current);
-      showNotice(current); // server truth: covers a notice the browser missed
+      // server truth: covers a notice the browser missed; a flag right after a tab switch came from it
+      showNotice(current, Date.now() - lastTabSwitchAt < TAB_NOTICE_WINDOW_MS ? "tab" : "look");
     };
     const uploader = new EventUploader(
-      session.id,
-      (events) => api<FlagStatus>(`/sessions/${session.id}/events`, { body: { events } }),
+      s.id,
+      (events) => api<FlagStatus>(`/sessions/${s.id}/events`, { body: { events } }),
       onStatus,
     );
-    const emit = (ev: ClientEvent) => void uploader.enqueue(ev);
-    const monitor = new ProctorMonitor(config, loadCalibration(session.id), examStart, {
+    const emit = (ev: ClientEvent) => {
+      if (ev.type === "TAB_SWITCH") {
+        lastTabSwitchAt = Date.now();
+        void uploader.enqueue(ev).then(() => uploader.flush()); // the server raises the flag: tell them promptly
+        return;
+      }
+      void uploader.enqueue(ev);
+    };
+    const monitor = new ProctorMonitor(config, loadCalibration(s.id), examStart, {
       emit,
       notice: (n) => {
         setCount(Math.min(n, config.max_flags));
-        showNotice(n);
+        showNotice(n, "look");
       },
       snapshot: () => (video.current ? snapshotFrame(video.current) : null),
       flagCount: () => current,
@@ -82,9 +104,9 @@ export function ProctoringLayer({ session }: { session: CandidateSession }) {
     async function identityCheck() {
       try {
         if (lastSignals?.faces === 1 && lastSignals.box && video.current) {
-          await api(`/sessions/${session.id}/verify`, { body: { kind: "random", image: cropBox(video.current, lastSignals.box) } });
+          await api(`/sessions/${s.id}/verify`, { body: { kind: "random", image: cropBox(video.current, lastSignals.box) } });
         }
-        const next = await api<CandidateSession>(`/sessions/${session.id}`);
+        const next = await api<CandidateSession>(`/sessions/${s.id}`);
         scheduleIdentity(next.next_identity_check_in_s ?? null);
       } catch {
         /* a missed random check is not an error for the candidate */
@@ -108,7 +130,7 @@ export function ProctoringLayer({ session }: { session: CandidateSession }) {
           monitor.onSignals(s);
         });
         if (cancelled) vision.stop();
-        scheduleIdentity(session.next_identity_check_in_s ?? null);
+        scheduleIdentity(s.next_identity_check_in_s ?? null);
       } catch {
         cameraLost(); // the assessment continues; the mentor decides
       }
@@ -124,13 +146,19 @@ export function ProctoringLayer({ session }: { session: CandidateSession }) {
     };
     // run once per session/config
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.data, session.id]);
+  }, [cfg.data, sessionId]);
 
+  return { count, max, notice, noticeReason, videoRef: video };
+}
+
+/** Shows only the small flag counter and the neutral notice. */
+export function ProctoringLayer({ session }: { session: CandidateSession }) {
+  const { count, max, notice, noticeReason, videoRef: video } = useProctoring(session);
   return (
     <>
       <video ref={video} className="hidden" muted playsInline aria-hidden="true" />
       <FlagCounter count={count} max={max} />
-      <FlagNotice flagNo={notice} max={max} />
+      <FlagNotice flagNo={notice} max={max} reason={noticeReason} />
     </>
   );
 }

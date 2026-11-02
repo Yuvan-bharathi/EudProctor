@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.models import Answer, Role, SessionStatus
+from app.models import Answer, ExamAssignment, Role, SessionStatus
 from app.models.base import utcnow
 from app.services.sessions import sweep_deadlines
 from tests.conftest import auth, make_user
@@ -162,3 +162,15 @@ def test_my_assessments_lists_assignments(client, db, mentor, course, candidate)
     build_session(db, exam, candidate)
     res = client.get("/api/v1/candidates/me/assessments", headers=auth(candidate)).json()
     assert res[0]["title"] == "Optics quiz" and res[0]["session_status"] == "in_progress"
+
+
+def test_my_assessments_newest_first_with_counts(client, db, mentor, course, candidate):
+    older = build_exam(db, course, mentor, title="Older", n_questions=2)
+    newer = build_exam(db, course, mentor, title="Newer", n_questions=4)
+    newer.window_start = older.window_start + timedelta(hours=2)
+    for e in (older, newer):
+        db.add(ExamAssignment(exam_id=e.id, candidate_id=candidate.id))
+    db.commit()
+    res = client.get("/api/v1/candidates/me/assessments", headers=auth(candidate)).json()
+    assert [(a["title"], a["questions_count"]) for a in res] == [("Newer", 4), ("Older", 2)]
+    assert res[0]["course_name"] == course.name and res[0]["session_id"] is None
