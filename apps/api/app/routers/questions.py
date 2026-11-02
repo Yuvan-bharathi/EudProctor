@@ -21,12 +21,15 @@ from app.models import (
     Topic,
     User,
 )
+from app.agent.recommendation_agent import generate_recommendations
 from app.routers.courses import require_course_mentor
 from app.schemas.exams import (
     MisconceptionIn,
     MisconceptionOut,
     QuestionIn,
     QuestionOut,
+    RecommendIn,
+    RecommendOut,
     SuggestIn,
     SuggestOut,
     TopicIn,
@@ -242,3 +245,36 @@ def accept_question(
 @router.post("/questions/{question_id}/skip", response_model=QuestionOut)
 def skip_question(question_id: uuid.UUID, db: Session = Depends(get_db), mentor: User = Depends(mentor_only)):
     return _decide(db, mentor, question_id, QuestionStatus.skipped)
+
+
+@router.post("/questions/recommend", response_model=RecommendOut)
+def recommend_questions(
+    body: RecommendIn,
+    db: Session = Depends(get_db),
+    mentor: User = Depends(mentor_only),
+):
+    """AI Question Recommendation Agent for the mentor question creation workflow.
+
+    Dynamically generates academically rigorous, pedagogically aligned MCQs based on subject,
+    topic, difficulty, and marks, ensuring questions are non-repeating and human-in-the-loop approved.
+    """
+    recs = generate_recommendations(
+        db=db,
+        mentor=mentor,
+        subject=body.subject,
+        topic=body.topic,
+        difficulty=body.difficulty,
+        marks=body.marks,
+        question_type=body.question_type,
+        n=body.n,
+        course_id=body.course_id,
+        exclude_bodies=body.exclude_bodies,
+    )
+    return RecommendOut(
+        subject=body.subject,
+        topic=body.topic,
+        difficulty=body.difficulty,
+        marks=body.marks,
+        recommendations=recs,
+    )
+
