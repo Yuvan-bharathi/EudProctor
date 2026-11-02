@@ -8,7 +8,14 @@ let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
-    console.log(`[EmailService] Initializing Nodemailer SMTP transport -> ${config.smtp.host}:${config.smtp.port}`);
+    if (config.isExternal && (!config.smtp.host || config.smtp.host === "127.0.0.1" || config.smtp.host === "localhost")) {
+      throw new Error(
+        "EMAIL_MODE is set to 'external', but no external SMTP host is configured. " +
+        "Please configure EXTERNAL_SMTP_HOST, EXTERNAL_SMTP_USER, and EXTERNAL_SMTP_PASS in your .env file."
+      );
+    }
+    const modeLabel = config.isExternal ? "EXTERNAL INTERNET SMTP" : "LOCAL DEV MAILBOX";
+    console.log(`[EmailService] Initializing Nodemailer [${modeLabel}] -> ${config.smtp.host}:${config.smtp.port} (Auth: ${config.smtp.auth ? config.smtp.auth.user : 'none'})`);
     transporter = nodemailer.createTransport({
       host: config.smtp.host,
       port: config.smtp.port,
@@ -105,23 +112,23 @@ async function sendInvitation({
     const actualMessageId = info.messageId || rawMessageId;
     const smtpResponse = info.response || "250 Message accepted for delivery";
 
-    // 3. Record Sent / Delivered based on SMTP server acknowledgment
+    // 3. Record Sent based on SMTP server acknowledgment (Not marked Delivered merely because of 250 OK)
     const record = deliveryStore.recordSent(rawMessageId, {
       smtpResponse,
       accepted: info.accepted,
       rejected: info.rejected,
     });
 
-    console.log(`[EmailService] Delivered successfully -> messageId: ${actualMessageId} | SMTP Response: ${smtpResponse}`);
+    console.log(`[EmailService] Sent successfully -> messageId: ${actualMessageId} | SMTP Response: ${smtpResponse}`);
 
     return {
       success: true,
       messageId: actualMessageId,
-      status: record.status, // "Delivered" or "Sent"
+      status: record.status, // "Sent"
       smtpResponse,
       accepted: info.accepted || [to],
       rejected: info.rejected || [],
-      deliveredAt: record.deliveredAt || new Date().toISOString(),
+      deliveredAt: record.deliveredAt || null,
       recipient: to,
     };
   } catch (err) {

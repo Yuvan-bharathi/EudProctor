@@ -59,7 +59,7 @@ class DeliveryStore {
       to,
       candidateName,
       assessmentTitle,
-      status: "Queued",
+      status: "Pending", // Status: Pending when invitation created/queued
       queuedAt: new Date().toISOString(),
       sentAt: null,
       deliveredAt: null,
@@ -75,18 +75,23 @@ class DeliveryStore {
 
   recordSent(messageId, { smtpResponse, accepted, rejected }) {
     const item = this.records.get(messageId) || { messageId };
-    item.status = "Sent";
+    item.status = "Sent"; // Status: Sent when email provider/MTA accepts the message
     item.sentAt = new Date().toISOString();
     item.smtpResponse = smtpResponse;
     item.accepted = accepted;
     item.rejected = rejected;
+    // Note: Do NOT mark as Delivered merely on 250 OK. Delivered requires provider delivery event/webhook.
 
-    // In direct local/RFC SMTP, a 250 response indicates message acceptance by remote MTA
-    if (typeof smtpResponse === "string" && smtpResponse.includes("250")) {
-      item.status = "Delivered";
-      item.deliveredAt = new Date().toISOString();
-    }
+    this.records.set(messageId, item);
+    this.save();
+    return item;
+  }
 
+  recordDelivered(messageId, eventData = {}) {
+    const item = this.records.get(messageId) || { messageId };
+    item.status = "Delivered"; // Status: Delivered confirmed by provider webhook or delivery receipt
+    item.deliveredAt = eventData.timestamp || new Date().toISOString();
+    item.deliveryDetails = eventData;
     this.records.set(messageId, item);
     this.save();
     return item;

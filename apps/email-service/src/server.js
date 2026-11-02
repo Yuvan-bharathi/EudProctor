@@ -56,14 +56,22 @@ const server = http.createServer(async (req, res) => {
 
   // 1. Healthcheck
   if (req.method === "GET" && pathname === "/health") {
-    const smtpCheck = await verifyConnection();
+    let smtpCheck = { ok: false, error: null };
+    try {
+      smtpCheck = await verifyConnection();
+    } catch (e) {
+      smtpCheck = { ok: false, error: e.message };
+    }
     return sendJson(res, smtpCheck.ok ? 200 : 503, {
       status: smtpCheck.ok ? "healthy" : "smtp_unreachable",
       service: "eduproctor-email-service",
       engine: "nodemailer",
+      mode: config.mode,
       smtp: {
         host: config.smtp.host,
         port: config.smtp.port,
+        secure: config.smtp.secure,
+        authenticated: Boolean(config.smtp.auth),
         connected: smtpCheck.ok,
         error: smtpCheck.error || null,
       },
@@ -138,9 +146,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && pathname === "/webhook") {
     try {
       const event = await parseBody(req);
-      const { messageId, eventType, reason } = event;
+      const { messageId, eventType, reason, timestamp } = event;
       if (messageId && eventType === "bounce") {
         deliveryStore.recordBounced(messageId, reason || "Undeliverable");
+      } else if (messageId && (eventType === "delivered" || eventType === "delivery")) {
+        deliveryStore.recordDelivered(messageId, { reason, timestamp });
       }
       return sendJson(res, 200, { received: true, eventType });
     } catch (err) {
@@ -159,7 +169,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.port, "0.0.0.0", () => {
   console.log(`[EmailService] Node.js Nodemailer microservice listening on http://0.0.0.0:${config.port}`);
-  console.log(`[EmailService] Configured SMTP -> ${config.smtp.host}:${config.smtp.port}`);
+  console.log(`[EmailService] Mode: ${config.isExternal ? "EXTERNAL INTERNET SMTP (YOPmail / Real Inboxes)" : "LOCAL DEV MAILBOX (localhost:8025)"}`);
+  console.log(`[EmailService] Target SMTP -> ${config.smtp.host}:${config.smtp.port}`);
 });
 
 process.on("SIGTERM", () => {
