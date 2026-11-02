@@ -1,483 +1,536 @@
-﻿import {
-  Award,
+﻿import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
   CalendarCheck2,
   CheckCircle2,
   Clock,
-  Code2,
-  ExternalLink,
+  Inbox,
   ListTodo,
+  MessageCircleQuestion,
+  ScanSearch,
   Sparkles,
   Users,
+  Wifi,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
-import { useAuth } from "@/features/auth/store";
-import {
-  getInternshipManagerForUser,
-  getPersistedMentees,
-  getPersistedTasks,
-  mockLeaveRequests,
-  saveTaskToStorage,
-} from "@/lib/mockData";
-import type { InternshipMentee, InternshipTask, LeaveRequest } from "@/lib/types";
+import { EmptyState, ErrorState, LoadingState } from "@/components/States";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { errorMessage } from "@/lib/api";
+import { type AgentKind, type DayStatus, type StallAlertRow, internshipApi } from "@/lib/internshipApi";
+import { cn } from "@/lib/utils";
+
+const INBOX = "/mentor/internship/coding";
+
+const AGENT_LABEL: Record<AgentKind, string> = {
+  code_review: "Code review",
+  weekly_quiz: "Weekly quiz",
+  appraisal: "Appraisal",
+};
+
+const STALL_SOURCE: Record<StallAlertRow["source"], { label: string; tone: BadgeProps["tone"] }> = {
+  auto: { label: "Auto-detected", tone: "neutral" },
+  self_flag: { label: "Self-flagged", tone: "warning" },
+  blocker_chat: { label: "Co-Pilot escalation", tone: "ai" },
+};
+
+const DAY_STATUS_TONE: Record<DayStatus, BadgeProps["tone"]> = {
+  Present: "success",
+  "Half Day": "warning",
+  Short: "warning",
+  Leave: "info",
+  Absent: "danger",
+  "In Progress": "primary",
+  "Needs Correction": "danger",
+};
+
+function localToday() {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function fmtDateTime(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function fmtTime(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 export function ManagerInternshipHubPage() {
-  usePageTitle("Internship Programme Hub");
-  const { user } = useAuth();
+  usePageTitle("Internship Hub");
+  const qc = useQueryClient();
+  const today = localToday();
+  const [scanResult, setScanResult] = useState<string | null>(null);
 
-  const [mentees, setMentees] = useState<InternshipMentee[]>(() => getPersistedMentees());
-  const [tasks, setTasks] = useState<InternshipTask[]>(() => getPersistedTasks());
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(mockLeaveRequests);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const overview = useQuery({ queryKey: ["internship", "overview"], queryFn: internshipApi.overview });
+  const stalls = useQuery({ queryKey: ["internship", "stall-alerts", "open"], queryFn: () => internshipApi.stallAlerts(true) });
+  const approvals = useQuery({
+    queryKey: ["internship", "approvals", "pending", "all"],
+    queryFn: () => internshipApi.approvals({ status: "pending" }),
+  });
+  const attendance = useQuery({
+    queryKey: ["internship", "attendance-today"],
+    queryFn: () => internshipApi.menteesAttendanceToday(),
+  });
+  const standups = useQuery({
+    queryKey: ["internship", "standups", today],
+    queryFn: () => internshipApi.standups({ on: today }),
+  });
+  const blockers = useQuery({ queryKey: ["internship", "blocker-history"], queryFn: () => internshipApi.blockerHistory() });
+  const mentees = useQuery({ queryKey: ["internship", "mentees"], queryFn: () => internshipApi.mentees() });
 
-  useEffect(() => {
-    const handleMenteeUpdate = () => setMentees(getPersistedMentees());
-    const handleTaskUpdate = () => setTasks(getPersistedTasks());
-    window.addEventListener("eduproctor_mentees_updated", handleMenteeUpdate);
-    window.addEventListener("eduproctor_tasks_updated", handleTaskUpdate);
-    return () => {
-      window.removeEventListener("eduproctor_mentees_updated", handleMenteeUpdate);
-      window.removeEventListener("eduproctor_tasks_updated", handleTaskUpdate);
-    };
-  }, []);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const currentManager = getInternshipManagerForUser(user);
-  const managerId = currentManager.id;
-  const filteredMentees = mentees.filter((m) => m.managerId === managerId);
-  const myMentees = filteredMentees.length > 0 ? filteredMentees : mentees.slice(0, 2);
-  const filteredTasks = tasks.filter((t) => t.managerId === managerId);
-  const myTasks = filteredTasks.length > 0 ? filteredTasks : tasks;
-  const pendingTasks = myTasks.filter((t) => t.status === "Review");
-
-  const handleApproveTask = (task: InternshipTask) => {
-    const updated: InternshipTask = {
-      ...task,
-      status: "Done",
-      managerFeedback: "Excellent work! Verified requirements and test cases passed.",
-    };
-    saveTaskToStorage(updated);
-    showToast(`Approved task: "${task.title}"`);
-  };
-
-  const handleReworkTask = (task: InternshipTask) => {
-    const updated: InternshipTask = {
-      ...task,
-      status: "Rework",
-      managerFeedback: "Please refine the error handling and re-submit with edge case tests.",
-    };
-    saveTaskToStorage(updated);
-    showToast(`Requested rework for: "${task.title}"`);
-  };
-
-  const handleLeaveDecision = (reqId: string, status: "Approved" | "Rejected") => {
-    setLeaveRequests((prev) =>
-      prev.map((r) => (r.id === reqId ? { ...r, status } : r)),
-    );
-    showToast(`Leave request ${status.toLowerCase()} successfully.`);
-  };
+  const ack = useMutation({
+    mutationFn: (id: string) => internshipApi.ackStall(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["internship", "stall-alerts"] });
+      qc.invalidateQueries({ queryKey: ["internship", "overview"] });
+    },
+  });
+  const scan = useMutation({
+    mutationFn: internshipApi.stallScan,
+    onMutate: () => setScanResult(null),
+    onSuccess: (r) => {
+      setScanResult(
+        r.created === 0 ? "Scan complete: no new stalled tasks." : `Scan complete: ${r.created} new stall alert${r.created === 1 ? "" : "s"}.`,
+      );
+      qc.invalidateQueries({ queryKey: ["internship", "stall-alerts"] });
+      qc.invalidateQueries({ queryKey: ["internship", "overview"] });
+    },
+  });
 
   return (
     <div className="space-y-6">
-      {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg animate-in fade-in slide-in-from-top-3">
-          <CheckCircle2 className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-text sm:text-2xl">Internship Hub</h1>
+          <p className="text-sm text-muted">Today’s picture of your interns: alerts, approvals, attendance and standups.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" asChild>
+            <Link to={INBOX}>
+              <Inbox /> AI Approval Inbox
+            </Link>
+          </Button>
+          <Button asChild>
+            <Link to="/mentor/internship/tasks">
+              <ListTodo /> Manage tasks
+            </Link>
+          </Button>
+        </div>
+      </div>
+
+      {/* Counters */}
+      {overview.isPending ? (
+        <LoadingState rows={1} />
+      ) : overview.isError ? (
+        <ErrorState message={errorMessage(overview.error)} onRetry={() => overview.refetch()} />
+      ) : (
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard label="Active interns" value={overview.data.active_interns} icon={<Users />} />
+          <StatCard label="Online now" value={overview.data.online_now} icon={<Wifi />} />
+          <StatCard
+            label="Pending approvals"
+            value={overview.data.pending_approvals}
+            icon={<Sparkles />}
+            to={INBOX}
+            highlight={overview.data.pending_approvals > 0 ? "ai" : undefined}
+          />
+          <StatCard
+            label="Open stall alerts"
+            value={overview.data.open_stall_alerts}
+            icon={<AlertTriangle />}
+            highlight={overview.data.open_stall_alerts > 0 ? "warning" : undefined}
+          />
+          <StatCard label="Tasks in review" value={overview.data.tasks_in_review} icon={<Clock />} to="/mentor/internship/tasks" />
+          <StatCard
+            label="Pending leave"
+            value={overview.data.pending_leave}
+            icon={<CalendarCheck2 />}
+            to="/mentor/internship/attendance"
+          />
         </div>
       )}
 
-      {/* Hero Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-r from-emerald-50 via-teal-50/40 to-slate-50 p-6 shadow-xs">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-              <Sparkles className="size-3 text-emerald-600" />
-              <span>EduProctor Intelligence v3 · Internship Edition</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-              Manager Internship Hub
-            </h1>
-            <p className="max-w-2xl text-xs text-slate-600 sm:text-sm">
-              Coaching <span className="font-semibold text-emerald-700">{myMentees.length} of 2 Mentees</span> (1:2 ratio policy). Tracking 3-month skill progression, sprint submissions, and monthly calibration scorecards.
-            </p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2 flex-wrap">
-            <Link
-              to="/mentor/internship/tasks"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3.5 py-2 text-xs font-semibold text-emerald-800 shadow-2xs hover:bg-emerald-50"
-            >
-              <Sparkles className="size-4 text-emerald-600" />
-              <span>Weekly MCQs & AI Reviews</span>
-            </Link>
-            <Link
-              to="/mentor/internship/mentees"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-slate-900"
-            >
-              <Users className="size-4 text-slate-500" />
-              <span>Skill Matrices</span>
-            </Link>
-            <Link
-              to="/mentor/internship/tasks"
-              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700"
-            >
-              <ListTodo className="size-4" />
-              <span>Assign Sprint Task</span>
-            </Link>
-          </div>
-        </div>
-
-        {/* 3-Month Program Timeline Pill */}
-        <div className="mt-5 grid grid-cols-1 gap-2 pt-4 border-t border-emerald-100/80 sm:grid-cols-3">
-          <div className="flex items-center gap-2.5 rounded-lg bg-white/70 px-3 py-2 text-xs">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-700">M1</span>
-            <div>
-              <p className="font-semibold text-slate-800">Month 1: Foundations</p>
-              <p className="text-[11px] text-slate-500">Core concepts · Level 1–2</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 rounded-lg bg-emerald-100/70 border border-emerald-300/60 px-3 py-2 text-xs">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white">M2</span>
-            <div>
-              <p className="font-semibold text-emerald-900">Month 2: Applied Skills (Active)</p>
-              <p className="text-[11px] text-emerald-700">Production tasks · Level 2–3</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 rounded-lg bg-white/70 px-3 py-2 text-xs">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-700">M3</span>
-            <div>
-              <p className="font-semibold text-slate-800">Month 3: Capstone & Review</p>
-              <p className="text-[11px] text-slate-500">Hiring conversion · Level 3–5</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Top 4 KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <div className="flex items-center justify-between text-muted">
-            <span className="text-xs font-medium text-slate-500">Paired Mentees</span>
-            <div className="rounded-lg bg-emerald-50 p-2 text-emerald-600">
-              <Users className="size-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900">{myMentees.length}</span>
-            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-              Max 2 Limit
-            </span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500">100% capacity · 1:2 strict ratio</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <div className="flex items-center justify-between text-muted">
-            <span className="text-xs font-medium text-slate-500">Tasks in Review</span>
-            <div className="rounded-lg bg-amber-50 p-2 text-amber-600">
-              <Clock className="size-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900">{pendingTasks.length}</span>
-            <span className="text-xs font-medium text-amber-700">Awaiting Feedback</span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500">{myTasks.length} total sprint tasks active</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <div className="flex items-center justify-between text-muted">
-            <span className="text-xs font-medium text-slate-500">Weekly Attendance</span>
-            <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
-              <CalendarCheck2 className="size-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900">96.5%</span>
-            <span className="text-xs font-medium text-emerald-600">On Track</span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500">5% weight in monthly scorecard</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <div className="flex items-center justify-between text-muted">
-            <span className="text-xs font-medium text-slate-500">Average Composite Score</span>
-            <div className="rounded-lg bg-purple-50 p-2 text-purple-600">
-              <Award className="size-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900">
-              {myMentees.length > 0
-                ? Math.round(
-                    myMentees.reduce((acc, m) => acc + m.compositeScorePct, 0) / myMentees.length,
-                  )
-                : 85}
-              %
-            </span>
-            <span className="text-xs font-medium text-purple-700">Month 2 Avg</span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500">MCQ (25%) + Code (30%) + Comm (20%)</p>
-        </div>
-      </div>
-
-      {/* Mentees Spotlight Section (Max 2 Mentees strictly) */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">
-            Assigned Mentees (2 Active)
-          </h2>
-          <span className="text-xs text-slate-500">
-            Strict 1:2 manager mentorship constraint enforced
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {myMentees.map((mentee) => (
-            <div
-              key={mentee.id}
-              className="group relative flex flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs transition-all hover:border-emerald-300 hover:shadow-xs"
-            >
-              <div>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {mentee.avatar?.startsWith("http") || mentee.avatar?.startsWith("/") ? (
-                      <img
-                        src={mentee.avatar}
-                        alt={mentee.name}
-                        className="size-12 rounded-full border border-slate-200 object-cover"
-                      />
-                    ) : (
-                      <div className="flex size-12 items-center justify-center rounded-full border border-slate-200 bg-emerald-100 text-sm font-bold text-emerald-800">
-                        {mentee.avatar || mentee.name.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-slate-900">{mentee.name}</h3>
-                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          {mentee.track}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-500">{mentee.email} · {mentee.phone}</p>
-                      <p className="text-[11px] text-slate-400">Roll: {mentee.rollNumber} · {mentee.cohortName}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="inline-block rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-800">
-                      Month {mentee.currentMonth} of 3
-                    </span>
-                    <p className="mt-1 text-[11px] font-semibold text-emerald-600">
-                      Score: {mentee.compositeScorePct}%
-                    </p>
-                  </div>
-                </div>
-
-                {/* 5-pillar mini breakdown */}
-                <div className="mt-4 rounded-lg bg-slate-50 p-3">
-                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                    <span>Skill Progress</span>
-                    <span className="font-semibold text-slate-800">
-                      {mentee.tasksCompletedCount} tasks done · {mentee.attendanceRatePct}% attendance
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    {mentee.skills.slice(0, 4).map((sk) => (
-                      <span
-                        key={sk.name}
-                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-700"
-                      >
-                        {sk.name}: <span className="font-bold text-emerald-700">L{sk.currentLevel ?? 1}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                <Link
-                  to="/mentor/internship/mentees"
-                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
-                >
-                  View Full Skill Matrix →
-                </Link>
-                <div className="flex items-center gap-2">
-                  <Link
-                    to="/mentor/internship/coding"
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    <Code2 className="size-3.5 text-slate-500" />
-                    <span>Review Code</span>
-                  </Link>
-                  <Link
-                    to="/mentor/internship/reviews"
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
-                  >
-                    <Award className="size-3.5" />
-                    <span>Monthly Review</span>
-                  </Link>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 2-Column: Pending Task Reviews & Leave Approvals */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Sprint Tasks Pending Review */}
-        <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        {/* Stall alerts */}
+        <Card>
+          <CardHeader>
             <div>
-              <h3 className="font-semibold text-slate-900">Sprint Tasks Awaiting Manager Review</h3>
-              <p className="text-xs text-slate-500">Evaluate PR submissions against quality rubric</p>
+              <CardTitle>Stall alerts</CardTitle>
+              <CardDescription>Interns who may be stuck. Acknowledge once you’ve reached out.</CardDescription>
             </div>
-            <Link
-              to="/mentor/internship/tasks"
-              className="text-xs font-medium text-emerald-700 hover:underline"
-            >
-              All Tasks →
-            </Link>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {pendingTasks.length === 0 ? (
-              <div className="rounded-lg bg-slate-50 p-6 text-center text-xs text-slate-500">
-                <CheckCircle2 className="mx-auto mb-2 size-6 text-emerald-500" />
-                All pending sprint submissions have been reviewed!
-              </div>
+            <Button variant="secondary" size="sm" onClick={() => scan.mutate()} disabled={scan.isPending}>
+              <ScanSearch /> {scan.isPending ? "Scanning…" : "Scan for stalled tasks now"}
+            </Button>
+          </CardHeader>
+          <div className="space-y-3">
+            {scanResult && (
+              <p role="status" className="flex items-center gap-2 rounded-lg bg-success-50 px-3 py-2 text-sm text-success-700">
+                <CheckCircle2 className="size-4" aria-hidden="true" /> {scanResult}
+              </p>
+            )}
+            {scan.isError && <ErrorState message={errorMessage(scan.error)} />}
+            {ack.isError && <ErrorState message={errorMessage(ack.error)} />}
+            {stalls.isPending ? (
+              <LoadingState />
+            ) : stalls.isError ? (
+              <ErrorState message={errorMessage(stalls.error)} onRetry={() => stalls.refetch()} />
+            ) : stalls.data.length === 0 ? (
+              <EmptyState message="No open stall alerts." />
             ) : (
-              pendingTasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5 transition-all hover:bg-white"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-semibold text-xs text-slate-900">{task.title}</h4>
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                          Review
-                        </span>
+              <ul className="space-y-2">
+                {stalls.data.map((s) => (
+                  <li key={s.id} className="rounded-lg border border-border p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-text">{s.mentee_name}</span>
+                          <Badge tone={STALL_SOURCE[s.source].tone}>{STALL_SOURCE[s.source].label}</Badge>
+                        </div>
+                        {s.task_title && <p className="mt-1 text-xs text-muted">Task: {s.task_title}</p>}
+                        {s.reason && <p className="mt-1 text-sm text-text">{s.reason}</p>}
+                        <p className="mt-1 text-xs text-subtle">{fmtDateTime(s.created_at)}</p>
                       </div>
-                      <p className="mt-1 text-xs text-slate-600 line-clamp-2">{task.description}</p>
-                      {task.submissionUrl && (
-                        <a
-                          href={task.submissionUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:underline"
-                        >
-                          <ExternalLink className="size-3" />
-                          <span>{task.submissionUrl}</span>
-                        </a>
-                      )}
-                      {task.submissionNotes && (
-                        <p className="mt-1 text-[11px] italic text-slate-500">
-                          Notes: "{task.submissionNotes}"
-                        </p>
-                      )}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={ack.isPending && ack.variables === s.id}
+                        onClick={() => ack.mutate(s.id)}
+                      >
+                        Acknowledge
+                      </Button>
                     </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-200/60 pt-2.5">
-                    <button
-                      type="button"
-                      onClick={() => handleReworkTask(task)}
-                      className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100 cursor-pointer"
-                    >
-                      Request Rework
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleApproveTask(task)}
-                      className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 cursor-pointer"
-                    >
-                      Approve & Mark Done
-                    </button>
-                  </div>
-                </div>
-              ))
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
-        </div>
+        </Card>
 
-        {/* Leave Requests & Attendance Approvals */}
-        <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        {/* Pending approvals preview */}
+        <Card>
+          <CardHeader>
             <div>
-              <h3 className="font-semibold text-slate-900">Leave Requests & Attendance Approvals</h3>
-              <p className="text-xs text-slate-500">Daily check-in / check-out verification (No biometrics)</p>
+              <CardTitle>Waiting for your approval</CardTitle>
+              <CardDescription>AI drafts reach interns only after you approve them.</CardDescription>
+            </div>
+            <Link to={INBOX} className="text-sm font-medium text-primary-700 underline-offset-4 hover:underline">
+              Open inbox
+            </Link>
+          </CardHeader>
+          {approvals.isPending ? (
+            <LoadingState />
+          ) : approvals.isError ? (
+            <ErrorState message={errorMessage(approvals.error)} onRetry={() => approvals.refetch()} />
+          ) : approvals.data.length === 0 ? (
+            <EmptyState message="Nothing is waiting for approval." />
+          ) : (
+            <ul className="space-y-2">
+              {approvals.data.slice(0, 5).map((d) => (
+                <li key={d.id}>
+                  <Link
+                    to={INBOX}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-ai-100 bg-ai-50 p-3 hover:bg-ai-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-text">{d.title}</p>
+                      <p className="text-xs text-muted">
+                        {d.mentee_name} · {fmtDateTime(d.created_at)}
+                      </p>
+                    </div>
+                    <Badge tone="ai">{AGENT_LABEL[d.agent]}</Badge>
+                  </Link>
+                </li>
+              ))}
+              {approvals.data.length > 5 && (
+                <li className="text-xs text-muted">and {approvals.data.length - 5} more in the inbox</li>
+              )}
+            </ul>
+          )}
+        </Card>
+
+        {/* Attendance today */}
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Attendance today</CardTitle>
+              <CardDescription>Status and hours as recorded by punch-in / punch-out.</CardDescription>
             </div>
             <Link
               to="/mentor/internship/attendance"
-              className="text-xs font-medium text-emerald-700 hover:underline"
+              className="text-sm font-medium text-primary-700 underline-offset-4 hover:underline"
             >
-              Full Log →
+              Full log
             </Link>
-          </div>
+          </CardHeader>
+          {attendance.isPending ? (
+            <LoadingState />
+          ) : attendance.isError ? (
+            <ErrorState message={errorMessage(attendance.error)} onRetry={() => attendance.refetch()} />
+          ) : attendance.data.length === 0 ? (
+            <EmptyState message="No interns assigned to you yet." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-surface-muted text-left text-xs uppercase tracking-wide text-muted">
+                    <th className="px-3 py-2 font-medium">Intern</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">Hours</th>
+                    <th className="px-3 py-2 font-medium">First punch-in</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendance.data.map((a) => (
+                    <tr key={a.mentee_id} className="border-t border-border">
+                      <td className="px-3 py-2 text-text">{a.name}</td>
+                      <td className="px-3 py-2">
+                        <Badge tone={DAY_STATUS_TONE[a.status] ?? "neutral"}>{a.status}</Badge>
+                        {a.open && <span className="ml-2 text-xs text-muted">punched in</span>}
+                      </td>
+                      <td className="px-3 py-2 text-text">{a.total_hours}</td>
+                      <td className="px-3 py-2 text-muted">{a.sessions[0] ? fmtTime(a.sessions[0].punch_in_at) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
 
-          <div className="mt-4 space-y-3">
-            {leaveRequests.map((req) => (
-              <div
-                key={req.id}
-                className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5 transition-all hover:bg-white"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-xs text-slate-900">{req.menteeName}</span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                          req.status === "Approved"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : req.status === "Rejected"
-                              ? "bg-rose-100 text-rose-800"
-                              : "bg-amber-100 text-amber-800"
-                        }`}
-                      >
-                        {req.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-600">
-                      <span className="font-medium text-slate-700">Dates:</span> {req.startDate} to {req.endDate}
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      <span className="font-medium">Reason:</span> {req.reason}
-                    </p>
+        {/* Standups today */}
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Today’s standups</CardTitle>
+              <CardDescription>{today}</CardDescription>
+            </div>
+          </CardHeader>
+          {standups.isPending ? (
+            <LoadingState />
+          ) : standups.isError ? (
+            <ErrorState message={errorMessage(standups.error)} onRetry={() => standups.refetch()} />
+          ) : standups.data.length === 0 ? (
+            <EmptyState message="No standups submitted yet today." />
+          ) : (
+            <ul className="space-y-3">
+              {standups.data.map((s) => (
+                <li key={s.id} className="rounded-lg border border-border p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-text">{s.mentee_name}</span>
+                    {s.task_title && <span className="text-xs text-muted">Task: {s.task_title}</span>}
                   </div>
-
-                  {req.status === "Pending" && (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleLeaveDecision(req.id, "Rejected")}
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 cursor-pointer"
-                      >
-                        Decline
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleLeaveDecision(req.id, "Approved")}
-                        className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700 cursor-pointer"
-                      >
-                        Approve
-                      </button>
+                  <dl className="mt-2 space-y-1">
+                    <div>
+                      <dt className="inline text-xs font-medium text-muted">Yesterday: </dt>
+                      <dd className="inline text-text">{s.yesterday || "—"}</dd>
                     </div>
-                  )}
+                    <div>
+                      <dt className="inline text-xs font-medium text-muted">Today: </dt>
+                      <dd className="inline text-text">{s.today || "—"}</dd>
+                    </div>
+                    <div className={cn(s.blockers.trim() && "rounded-md bg-warning-50 px-2 py-1")}>
+                      <dt className={cn("inline text-xs font-medium", s.blockers.trim() ? "text-warning-800" : "text-muted")}>
+                        Blockers:{" "}
+                      </dt>
+                      <dd className={cn("inline", s.blockers.trim() ? "text-warning-800" : "text-muted")}>
+                        {s.blockers.trim() || "None"}
+                      </dd>
+                    </div>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      {/* Co-Pilot conversations */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <MessageCircleQuestion className="size-4 text-ai-500" aria-hidden="true" /> Recent Blocker Co-Pilot conversations
+            </CardTitle>
+            <CardDescription>Live AI answers your interns received. Escalated ones need you.</CardDescription>
+          </div>
+        </CardHeader>
+        {blockers.isPending ? (
+          <LoadingState />
+        ) : blockers.isError ? (
+          <ErrorState message={errorMessage(blockers.error)} onRetry={() => blockers.refetch()} />
+        ) : blockers.data.length === 0 ? (
+          <EmptyState message="No Co-Pilot conversations yet." />
+        ) : (
+          <ul className="space-y-3">
+            {blockers.data.slice(0, 8).map((b) => (
+              <li
+                key={b.id}
+                className={cn(
+                  "rounded-lg border p-3 text-sm",
+                  b.escalated ? "border-warning-500 bg-warning-50" : "border-border",
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-text">{b.mentee_name}</span>
+                  <div className="flex items-center gap-2">
+                    {b.escalated && (
+                      <Badge tone="warning">
+                        <AlertTriangle aria-hidden="true" /> Escalated to you
+                      </Badge>
+                    )}
+                    <span className="text-xs text-subtle">{fmtDateTime(b.created_at)}</span>
+                  </div>
                 </div>
-              </div>
+                <p className="mt-2 text-text">
+                  <span className="font-medium">Q:</span> {b.question}
+                </p>
+                <p className="mt-1 line-clamp-3 whitespace-pre-line text-muted">
+                  <span className="font-medium text-ai-700">Co-Pilot:</span> {b.answer}
+                </p>
+                {b.citations.length > 0 && (
+                  <p className="mt-1 text-xs text-subtle">Sources: {b.citations.map((c) => c.title).join(", ")}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {/* Interns */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-text">Your interns</h2>
+          <Link to="/mentor/internship/mentees" className="text-sm font-medium text-primary-700 underline-offset-4 hover:underline">
+            Skill matrices
+          </Link>
+        </div>
+        {mentees.isPending ? (
+          <LoadingState />
+        ) : mentees.isError ? (
+          <ErrorState message={errorMessage(mentees.error)} onRetry={() => mentees.refetch()} />
+        ) : mentees.data.length === 0 ? (
+          <EmptyState message="No interns are assigned to you yet." />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {mentees.data.map((m) => (
+              <Card key={m.id} className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-10 items-center justify-center rounded-full bg-primary-50 text-sm font-semibold text-primary-700">
+                      {m.name.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-semibold text-text">{m.name}</h3>
+                        <Badge tone="primary">{m.track}</Badge>
+                        {m.online && <Badge tone="success">Online</Badge>}
+                      </div>
+                      <p className="text-xs text-muted">{m.email}</p>
+                      <p className="text-xs text-subtle">
+                        {m.cohort_name}
+                        {m.roll_number && ` · Roll ${m.roll_number}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <Badge>
+                      Week {m.current_week} · Month {m.current_month}
+                    </Badge>
+                    {m.today_status && (
+                      <div className="mt-1">
+                        <Badge tone={DAY_STATUS_TONE[m.today_status] ?? "neutral"}>{m.today_status}</Badge>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <dl className="grid grid-cols-3 gap-2 rounded-lg bg-surface-muted p-3 text-center">
+                  <div>
+                    <dt className="text-xs text-muted">Attendance</dt>
+                    <dd className="text-sm font-semibold text-text">
+                      {m.attendance_rate_pct === null || m.attendance_rate_pct === undefined ? "—" : `${m.attendance_rate_pct}%`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted">Tasks done</dt>
+                    <dd className="text-sm font-semibold text-text">
+                      {m.tasks_done ?? "—"} / {m.tasks_total ?? "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted">In review</dt>
+                    <dd className="text-sm font-semibold text-text">{m.tasks_in_review ?? "—"}</dd>
+                  </div>
+                </dl>
+                {m.skills && m.skills.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {m.skills.slice(0, 5).map((s) => (
+                      <Badge key={s.skill} tone={s.level === null ? "neutral" : "primary"}>
+                        {s.skill}: {s.level === null ? "Insufficient data" : `L${s.level}`}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </Card>
             ))}
           </div>
-        </div>
-      </div>
+        )}
+      </section>
     </div>
   );
 }
 
+function StatCard({
+  label,
+  value,
+  icon,
+  to,
+  highlight,
+}: {
+  label: string;
+  value: number;
+  icon: ReactNode;
+  to?: string;
+  highlight?: "ai" | "warning";
+}) {
+  const body = (
+    <>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted">{label}</span>
+        <span
+          className={cn(
+            "[&_svg]:size-4",
+            highlight === "ai" ? "text-ai-500" : highlight === "warning" ? "text-warning-500" : "text-muted",
+          )}
+          aria-hidden="true"
+        >
+          {icon}
+        </span>
+      </div>
+      <p className="mt-2 text-2xl font-semibold text-text">{value}</p>
+    </>
+  );
+  const cls = cn(
+    "block rounded-xl border p-4",
+    highlight === "ai" ? "border-ai-100 bg-ai-50" : highlight === "warning" ? "border-warning-500 bg-warning-50" : "border-border bg-surface",
+  );
+  return to ? (
+    <Link
+      to={to}
+      className={cn(cls, "hover:shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500")}
+    >
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
+}

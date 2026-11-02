@@ -20,6 +20,8 @@ from app.routers import (
     exams,
     health,
     identity,
+    internship,
+    invite,
     join,
     mentor,
     mentor_proctoring,
@@ -42,6 +44,8 @@ ROUTERS = [
     courses.router,
     questions.router,
     exams.router,
+    internship.router,
+    invite.router,
     join.router,
     sessions.router,
     identity.router,
@@ -74,6 +78,20 @@ async def _deadline_sweeper(interval: int) -> None:
             log.exception("deadline sweep failed")
 
 
+async def _internship_jobs(interval: int) -> None:
+    """Attendance auto-close, stall scan, Friday quiz drafts and 30/60/90 appraisal drafts."""
+    from app.jobs.internship import run_internship_jobs
+
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            get_engine()
+            with SessionLocal() as db:
+                await asyncio.to_thread(run_internship_jobs, db)
+        except Exception:
+            log.exception("internship jobs failed")
+
+
 async def _daily_retention() -> None:
     from app.jobs.retention import run_retention
 
@@ -92,8 +110,16 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     tasks = []
     if settings.environment != "test":
+        # Add new nullable columns on create_all-managed DBs (TiDB) and backfill Assessment IDs.
+        try:
+            from app.core.schema_sync import run as sync_schema
+
+            sync_schema(get_engine())
+        except Exception:  # never block startup; the error is visible in the log
+            log.exception("schema_sync failed")
         tasks.append(asyncio.create_task(_deadline_sweeper(settings.deadline_sweep_interval_s)))
         tasks.append(asyncio.create_task(_daily_retention()))
+        tasks.append(asyncio.create_task(_internship_jobs(settings.internship_scheduler_interval_s)))
     yield
     for task in tasks:
         task.cancel()

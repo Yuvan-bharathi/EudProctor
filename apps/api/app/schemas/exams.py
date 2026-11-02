@@ -161,10 +161,14 @@ class ExamPatch(BaseModel):
     window_end: datetime | None = None
     shuffle: bool | None = None
     flag_threshold_s: float | None = None
+    status: ExamStatus | None = None
+    pass_pct: int | None = Field(default=None, ge=1, le=100)
 
 
 class ExamOut(ORM):
     id: uuid.UUID
+    code: str | None = None  # Assessment ID, e.g. "ASM-7K3QX9"
+    pass_pct: int | None = None
     course_id: uuid.UUID
     title: str
     duration_min: int
@@ -198,6 +202,7 @@ class AssignmentOut(BaseModel):
     candidate_id: uuid.UUID
     candidate_name: str
     candidate_email: str
+    candidate_username: str | None = None
     link_sent_at: datetime | None
     link_used_at: datetime | None
     link_expires_at: datetime | None
@@ -260,3 +265,8 @@ class ImportedCandidateIn(BaseModel):
 
 class ImportCandidatesIn(BaseModel):
     candidates: list[ImportedCandidateIn]
+    # Only honoured when the assessment is already published (scheduled); for drafts the
+    # invitation is emailed when the mentor publishes.
+    send_invitations: bool = False
+    test_mode: bool | None = None
+    test_recipient: str | None = None

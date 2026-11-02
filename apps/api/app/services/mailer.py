@@ -122,23 +122,31 @@ def send_mail(
 
     msg = _build_message(actual_to, subject, body, html_body=html_body, original_to=original_to)
 
-    # 2. File Backend
+    # 2. File Backend — the message is only written to disk, nobody receives it.
+    # Reported as NOT delivered so the mentor dashboard never shows a false "Sent".
     if s.mail_backend == "file":
         out_path = _write_file(msg)
         return {
-            "delivered": True,
+            "delivered": False,
             "recipient": actual_to,
             "original_recipient": original_to,
             "is_test": is_test,
-            "status": "Delivered",
+            "status": "Failed",
             "provider": f"file ({out_path})",
-            "error": None,
+            "error": "MAIL_BACKEND=file: email saved to the local outbox only, not sent. Configure SMTP to deliver.",
         }
 
-    # 3. SMTP Backend (with automatic file outbox fallback on connection drop)
+    # 3. SMTP Backend
     try:
-        with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=5) as smtp:
-            smtp.send_message(msg)
+        smtp_cls = smtplib.SMTP_SSL if s.smtp_use_ssl else smtplib.SMTP
+        with smtp_cls(s.smtp_host, s.smtp_port, timeout=15) as smtp:
+            if s.smtp_use_tls and not s.smtp_use_ssl:
+                smtp.starttls()
+            if s.smtp_username:
+                smtp.login(s.smtp_username, s.smtp_password)
+            refused = smtp.send_message(msg)
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
         return {
             "delivered": True,
             "recipient": actual_to,
@@ -149,26 +157,18 @@ def send_mail(
             "error": None,
         }
     except Exception as exc:
-        log.warning("SMTP unreachable (%s); writing message to file outbox", exc)
+        # Keep a copy for debugging, but report the truth: the candidate did NOT get the email.
+        log.warning("SMTP delivery to %s failed (%s); copy kept in file outbox", actual_to, exc)
         try:
-            out_path = _write_file(msg)
-            return {
-                "delivered": True,
-                "recipient": actual_to,
-                "original_recipient": original_to,
-                "is_test": is_test,
-                "status": "Sent",
-                "provider": f"file_fallback ({out_path})",
-                "error": None,
-            }
-        except Exception as file_exc:
+            _write_file(msg)
+        except Exception as file_exc:  # pragma: no cover - disk failure
             log.error("Failed to write to file outbox: %s", file_exc)
-            return {
-                "delivered": False,
-                "recipient": actual_to,
-                "original_recipient": original_to,
-                "is_test": is_test,
-                "status": "Failed",
-                "provider": "smtp",
-                "error": str(exc),
-            }
+        return {
+            "delivered": False,
+            "recipient": actual_to,
+            "original_recipient": original_to,
+            "is_test": is_test,
+            "status": "Failed",
+            "provider": f"smtp://{s.smtp_host}:{s.smtp_port}",
+            "error": f"SMTP delivery failed ({s.smtp_host}:{s.smtp_port}): {exc}",
+        }

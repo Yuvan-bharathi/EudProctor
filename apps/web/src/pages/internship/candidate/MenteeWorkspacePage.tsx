@@ -1,442 +1,228 @@
-﻿import {
+﻿import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
   Award,
+  BookOpen,
   CalendarCheck2,
   CheckCircle2,
   Clock,
   Code2,
   FileQuestion,
+  ListTodo,
   LogOut,
-  Mail,
-  Phone,
-  Play,
+  MessageSquare,
   Rocket,
-  ShieldCheck,
+  Send,
   Sparkles,
-  Timer,
   TrendingUp,
+  UserRound,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { usePageTitle } from "@/app/layouts";
-import { useAuth } from "@/features/auth/store";
+import { EmptyState, ErrorState, LoadingState } from "@/components/States";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label, Select, Textarea } from "@/components/ui/input";
+import { errorMessage } from "@/lib/api";
 import {
-  FULL_STACK_12_WEEK_PLAN,
-  getInternshipMenteeForUser,
-  getPersistedAttendance,
-  getPersistedTasks,
-  getPersistedWeeklyMCQs,
-  recordAttendanceCheckIn,
-  recordAttendanceCheckOut,
-} from "@/lib/mockData";
-import type { DailyAttendance, InternshipTask, WeeklyMCQAssessment } from "@/lib/types";
+  internshipApi,
+  type AttendanceDay,
+  type BlockerAnswer,
+  type DayStatus,
+  type InternTask,
+  type InternTaskStatus,
+} from "@/lib/internshipApi";
+
+// ------------------------------------------------------------------ helpers
+
+const DAY_TONE: Record<DayStatus, BadgeProps["tone"]> = {
+  Present: "success",
+  "Half Day": "warning",
+  Short: "danger",
+  Leave: "info",
+  Absent: "neutral",
+  "In Progress": "primary",
+  "Needs Correction": "warning",
+};
+
+const TASK_TONE: Record<InternTaskStatus, BadgeProps["tone"]> = {
+  Assigned: "neutral",
+  "In Progress": "info",
+  Review: "warning",
+  Rework: "danger",
+  Done: "success",
+};
+
+function fmtTime(iso: string, timeZone?: string) {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone });
+  } catch {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+}
+
+function fmtElapsed(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+/** Current time, ticking every second while `active`. */
+function useNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+// ------------------------------------------------------------------ page
 
 export function MenteeWorkspacePage() {
   usePageTitle("Mentee Workspace");
-  const { user } = useAuth();
 
-  const [tasks, setTasks] = useState<InternshipTask[]>(() => getPersistedTasks());
-  const [attendance, setAttendance] = useState<DailyAttendance[]>(() =>
-    getPersistedAttendance(),
-  );
-  const [weeklyMcqs, setWeeklyMcqs] = useState<WeeklyMCQAssessment[]>(() =>
-    getPersistedWeeklyMCQs(),
-  );
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const me = useQuery({ queryKey: ["internship", "me"], queryFn: internshipApi.me });
+  const enrolled = me.data?.enrolled === true;
 
-  const myProfile = getInternshipMenteeForUser(user);
-  const menteeId = myProfile.id;
-  const myTasks = tasks.filter((t) => t.menteeId === menteeId);
+  const tasks = useQuery({
+    queryKey: ["internship", "tasks"],
+    queryFn: () => internshipApi.tasks(),
+    enabled: enrolled,
+  });
 
-  // Active curriculum sprint week (e.g. Week 2 or latest active)
-  const activeCurriculumWeek = FULL_STACK_12_WEEK_PLAN[1]; // Week 2
-  const activeWeeklyMcq = weeklyMcqs.find((m) => m.weekNumber === 2) || weeklyMcqs[0];
+  if (me.isPending) return <LoadingState rows={6} label="Loading your workspace" />;
+  if (me.isError) return <ErrorState message={errorMessage(me.error)} onRetry={() => me.refetch()} />;
 
-  const todayStr = new Date().toISOString().split("T")[0];
-  const todayAttendance = attendance.find(
-    (a) => a.menteeId === menteeId && a.date === todayStr,
-  );
+  if (!enrolled) {
+    return (
+      <EmptyState message="You're not enrolled in an internship yet. Once your programme admin adds you to a cohort, your workspace, tasks and attendance will appear here." />
+    );
+  }
 
-  useEffect(() => {
-    const handleAttUpdate = () => setAttendance(getPersistedAttendance());
-    const handleTaskUpdate = () => setTasks(getPersistedTasks());
-    const handleMcqUpdate = () => setWeeklyMcqs(getPersistedWeeklyMCQs());
-
-    window.addEventListener("eduproctor_attendance_updated", handleAttUpdate);
-    window.addEventListener("eduproctor_tasks_updated", handleTaskUpdate);
-    window.addEventListener("eduproctor_weekly_mcqs_updated", handleMcqUpdate);
-
-    return () => {
-      window.removeEventListener("eduproctor_attendance_updated", handleAttUpdate);
-      window.removeEventListener("eduproctor_tasks_updated", handleTaskUpdate);
-      window.removeEventListener("eduproctor_weekly_mcqs_updated", handleMcqUpdate);
-    };
-  }, []);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const handleCheckIn = () => {
-    recordAttendanceCheckIn(menteeId);
-    showToast("Checked in successfully for today!");
-  };
-
-  const handleCheckOut = () => {
-    recordAttendanceCheckOut(menteeId);
-    showToast("Checked out successfully for today! Hours logged: 8.5 hrs.");
-  };
+  const m = me.data;
+  const firstName = (m.name ?? "").split(" ")[0];
+  const fullDay = m.rules?.full_day_hours;
 
   return (
     <div className="space-y-6">
-      {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg animate-in fade-in slide-in-from-top-3">
-          <CheckCircle2 className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* Hero Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-r from-emerald-50 via-teal-50/40 to-slate-50 p-6 shadow-xs">
+      {/* Hero */}
+      <div className="rounded-xl border border-border bg-surface p-6 shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-              <Rocket className="size-3 text-emerald-600" />
-              <span>Internship Programme · Track: {myProfile?.track}</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-              Welcome back, {myProfile?.name.split(" ")[0]}!
+            <Badge tone="primary">
+              <Rocket className="size-3" aria-hidden="true" />
+              <span>
+                {m.cohort_name} · Track: {m.track}
+              </span>
+            </Badge>
+            <h1 className="text-xl font-semibold tracking-tight text-text sm:text-2xl">
+              Welcome back{firstName ? `, ${firstName}` : ""}!
             </h1>
-            <p className="max-w-2xl text-xs text-slate-600 sm:text-sm">
-              You are currently in <strong className="text-emerald-700">Month 2: Applied Skills</strong>. Complete daily check-ins, sprint deliverables, and prepare for Month 3 readiness calibration.
+            <p className="max-w-2xl text-sm text-muted">
+              You are in <strong className="text-primary-700">Month {m.current_month}, Week {m.current_week}</strong> of
+              your internship. Punch in when you start, post your standup and ask the Co-Pilot when you're stuck.
             </p>
           </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <Link
-              to="/candidate/internship/coding"
-              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700"
-            >
-              <Code2 className="size-4" />
-              <span>Launch Coding IDE</span>
+          <Button asChild>
+            <Link to="/candidate/internship/coding">
+              <Code2 aria-hidden="true" />
+              <span>Open Coding Platform</span>
             </Link>
-          </div>
+          </Button>
         </div>
 
-        {/* Attendance Check-In Widget Banner */}
-        <div className="mt-5 rounded-xl border border-emerald-200 bg-white/90 p-4 backdrop-blur-xs">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-700">
-                <CalendarCheck2 className="size-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                    Today's Attendance Status
-                  </h3>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                      todayAttendance?.checkInTime
-                        ? "bg-emerald-100 text-emerald-800"
-                        : "bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {todayAttendance?.checkInTime ? "Checked In" : "Not Checked In"}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {todayAttendance?.checkInTime
-                    ? `Checked in at ${todayAttendance.checkInTime} · ${todayAttendance.checkOutTime ? `Checked out at ${todayAttendance.checkOutTime} (${todayAttendance.totalHours} hrs)` : "Working"}`
-                    : "Standard workday check-in (Contributes 5% to graduation scorecard)"}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {!todayAttendance?.checkInTime ? (
-                <button
-                  type="button"
-                  onClick={handleCheckIn}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 cursor-pointer"
-                >
-                  <Clock className="size-4" />
-                  <span>Check In (09:15 AM)</span>
-                </button>
-              ) : !todayAttendance?.checkOutTime ? (
-                <button
-                  type="button"
-                  onClick={handleCheckOut}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 cursor-pointer"
-                >
-                  <LogOut className="size-4 text-slate-600" />
-                  <span>Check Out for Today</span>
-                </button>
-              ) : (
-                <span className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">
-                  ✔ Today's 8.5 Hours Logged
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
+        <PunchWidget fullDayHours={fullDay} />
       </div>
 
-      {/* 4 Stats Cards */}
+      {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">Attendance Rate</span>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {myProfile?.attendanceRatePct}%
-          </p>
-          <span className="text-[11px] text-emerald-600 font-medium">5% weight in monthly review</span>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">Tasks Completed</span>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {myProfile?.tasksCompletedCount}
-          </p>
-          <span className="text-[11px] text-slate-500">Sprint deliverables</span>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">Composite Score</span>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {myProfile?.compositeScorePct}%
-          </p>
-          <span className="text-[11px] text-purple-700 font-medium">Month 2 Standing</span>
-        </div>
-
-        <div className="rounded-xl border border-slate-200/90 bg-white p-4.5 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">Average Skill Level</span>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            Level 3.0
-          </p>
-          <span className="text-[11px] text-emerald-700 font-medium">Independent (L1–L5 scale)</span>
-        </div>
+        <Stat
+          label="Attendance rate (this month)"
+          value={m.attendance_rate_pct == null ? "—" : `${m.attendance_rate_pct}%`}
+          hint={m.attendance_rate_pct == null ? "Not enough working days yet" : "From your punch-in records"}
+        />
+        <Stat
+          label="Tasks completed"
+          value={m.tasks_total == null ? "—" : `${m.tasks_done ?? 0} / ${m.tasks_total}`}
+          hint="Approved by your mentor"
+        />
+        <Stat label="Waiting for review" value={String(m.tasks_in_review ?? 0)} hint="Submitted tasks" />
+        <Stat
+          label="Weekly quizzes to take"
+          value={String(m.pending_quizzes ?? 0)}
+          hint={(m.pending_quizzes ?? 0) > 0 ? "Released by your mentor" : "You're all caught up"}
+        />
       </div>
 
-      {/* Section: This Week's Knowledge Check (MCQ) & Active Curriculum Topic */}
-      <div className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-2xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
-          <div className="flex items-center gap-2">
-            <span className="flex size-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-              <FileQuestion className="size-4" />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-slate-900">
-                  This Week's Knowledge Check · Month {activeCurriculumWeek.month}, Week {activeCurriculumWeek.weekInMonth} (Week {activeCurriculumWeek.week})
-                </h2>
-                <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
-                  {activeCurriculumWeek.skillArea}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Theme: <strong>{activeCurriculumWeek.theme}</strong> · Evaluated by AI Assessment Evaluation Agent
-              </p>
-            </div>
+      {/* Weekly quiz banner */}
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-700">
+            <FileQuestion className="size-5" aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-text">Weekly knowledge check</p>
+            <p className="text-xs text-muted">
+              {(m.pending_quizzes ?? 0) > 0
+                ? `You have ${m.pending_quizzes} weekly quiz${m.pending_quizzes === 1 ? "" : "zes"} ready to take.`
+                : "No weekly quiz is waiting for you right now."}
+            </p>
           </div>
-
-          <Link
-            to="/candidate/internship/mcq"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:underline"
-          >
-            <span>View All 12 Weekly MCQs</span>
-            <span>→</span>
-          </Link>
         </div>
-
-        {/* Weekly MCQ Card */}
-        {activeWeeklyMcq && (
-          <div className="rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 transition-all hover:border-emerald-300 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div className="space-y-1.5 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-900">{activeWeeklyMcq.title}</span>
-                {activeWeeklyMcq.status === "published" && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                    <CheckCircle2 className="size-3" />
-                    Published (Score: {activeWeeklyMcq.scorePct}%)
-                  </span>
-                )}
-                {activeWeeklyMcq.status === "submitted" && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold text-amber-800">
-                    <Clock className="size-3" />
-                    Under AI & Manager Review (Provisional: {activeWeeklyMcq.scorePct}%)
-                  </span>
-                )}
-                {activeWeeklyMcq.status === "available" && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold text-blue-800">
-                    <Sparkles className="size-3" />
-                    Ready to Start
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
-                <span className="flex items-center gap-1">
-                  <FileQuestion className="size-3 text-slate-400" />
-                  {activeWeeklyMcq.questionCount} Questions
-                </span>
-                <span className="flex items-center gap-1">
-                  <Timer className="size-3 text-slate-400" />
-                  {activeWeeklyMcq.durationMinutes} Minutes Time Limit
-                </span>
-                <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-                  <ShieldCheck className="size-3 text-emerald-600" />
-                  Calm AI Proctoring (0 Flags)
-                </span>
-              </div>
-
-              {activeWeeklyMcq.agentAnalysis && (
-                <div className="mt-2 rounded-lg bg-white p-2.5 border border-slate-200/80 text-[11px] text-slate-600 space-y-1">
-                  <div className="flex items-center justify-between font-bold text-slate-700">
-                    <span className="flex items-center gap-1 text-emerald-700">
-                      <Sparkles className="size-3" />
-                      AI Evaluation Summary (Drafted for Manager {activeWeeklyMcq.managerName})
-                    </span>
-                    <span>Accuracy: {activeWeeklyMcq.agentAnalysis.accuracyPct}%</span>
-                  </div>
-                  <p className="italic text-slate-600">"{activeWeeklyMcq.agentAnalysis.summary}"</p>
-                </div>
-              )}
-            </div>
-
-            <div className="shrink-0 flex items-center gap-2">
-              <Link
-                to="/candidate/internship/mcq"
-                className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-bold text-white shadow-xs transition-all ${
-                  activeWeeklyMcq.status === "available"
-                    ? "bg-emerald-600 hover:bg-emerald-700"
-                    : "bg-slate-900 hover:bg-slate-800"
-                }`}
-              >
-                {activeWeeklyMcq.status === "available" ? (
-                  <>
-                    <Play className="size-3.5" />
-                    <span>Start Weekly MCQ Assessment</span>
-                  </>
-                ) : (
-                  <>
-                    <Award className="size-3.5" />
-                    <span>View Scorecard & AI Review</span>
-                  </>
-                )}
-              </Link>
-            </div>
-          </div>
-        )}
+        <Button asChild variant="secondary" size="sm">
+          <Link to="/candidate/internship/mcq">Go to Weekly MCQs →</Link>
+        </Button>
       </div>
 
-      {/* 2-Column: Manager-Assigned Sprint Tasks & Manager Contact */}
+      {/* Standup + Co-Pilot */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <StandupCard tasks={tasks.data ?? []} />
+        <BlockerCopilotCard tasks={tasks.data ?? []} />
+      </div>
+
+      {/* Tasks + mentor */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Left 2 Cols: Sprint Tasks */}
         <div className="space-y-3 lg:col-span-2">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                Manager-Assigned Week Tasks
-              </h2>
-              <p className="text-xs text-slate-500">
-                Deliverables assigned by Priya Sharma for your current curriculum sprints
-              </p>
+              <h2 className="text-base font-semibold text-text">My current tasks</h2>
+              <p className="text-xs text-muted">Assigned by {m.mentor_name ?? "your mentor"}</p>
             </div>
-            <Link
-              to="/candidate/internship/tasks"
-              className="text-xs font-semibold text-emerald-700 hover:underline"
-            >
-              View Full Sprint Kanban →
+            <Link to="/candidate/internship/tasks" className="text-xs font-semibold text-primary-700 hover:underline">
+              View all tasks →
             </Link>
           </div>
-
-          <div className="space-y-3">
-            {myTasks.slice(0, 3).map((task) => (
-              <div
-                key={task.id}
-                className="rounded-xl border border-slate-200/90 bg-white p-4 shadow-2xs transition-all hover:border-emerald-300"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-100">
-                        Month {task.monthNumber}, Week {task.weekNumber ? (task.weekNumber <= 4 ? task.weekNumber : task.weekNumber <= 8 ? task.weekNumber - 4 : task.weekNumber - 8) : 1}
-                      </span>
-                      <h3 className="font-semibold text-xs text-slate-900">{task.title}</h3>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                          task.status === "Done"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : task.status === "Review"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-blue-100 text-blue-800"
-                        }`}
-                      >
-                        {task.status}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-xs text-slate-600 line-clamp-2">
-                      {task.description}
-                    </p>
-                    <div className="mt-2.5 flex items-center gap-3 text-[11px] text-slate-400">
-                      <span>Area: <strong className="text-slate-600">{task.skillArea}</strong></span>
-                      <span>Due: <strong className="text-slate-600">{task.dueDate}</strong></span>
-                      <span>Priority: <strong className="text-rose-600">{task.priority}</strong></span>
-                    </div>
-                  </div>
-
-                  <Link
-                    to="/candidate/internship/tasks"
-                    className="shrink-0 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-                  >
-                    View / Submit →
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
+          <CurrentTasks query={tasks} />
         </div>
 
-        {/* Right 1 Col: Manager Card */}
         <div className="space-y-3">
-          <h2 className="text-base font-semibold text-slate-900">
-            Assigned Manager (1:2 Ratio)
-          </h2>
-
-          <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs">
+          <h2 className="text-base font-semibold text-text">My mentor</h2>
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="size-12 rounded-full bg-emerald-100 flex items-center justify-center font-bold text-emerald-800 text-base">
-                PS
+              <div className="flex size-12 items-center justify-center rounded-full bg-primary-50 text-primary-700">
+                <UserRound className="size-5" aria-hidden="true" />
               </div>
               <div>
-                <h3 className="font-bold text-slate-900 text-sm">Priya Sharma</h3>
-                <p className="text-xs text-slate-500">Engineering Manager · MERN</p>
-                <span className="rounded bg-emerald-50 px-1.5 py-0.2 text-[10px] font-semibold text-emerald-700">
-                  Managing 2 Mentees Max
-                </span>
+                <h3 className="text-sm font-semibold text-text">{m.mentor_name ?? "—"}</h3>
+                <p className="text-xs text-muted">
+                  {m.track} · started {m.started_on}
+                </p>
               </div>
             </div>
-
-            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
-              <div className="flex items-center gap-2">
-                <Mail className="size-3.5 text-slate-400" />
-                <span>priya.sharma@example.com</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Phone className="size-3.5 text-slate-400" />
-                <span>+91 98765 43210</span>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <Link
-                to="/candidate/internship/skills"
-                className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                <TrendingUp className="size-3.5 text-slate-500" />
-                <span>My Skill Competency Matrix</span>
-              </Link>
-            </div>
+            <nav aria-label="Internship pages" className="mt-4 grid gap-2 border-t border-border pt-3">
+              <QuickLink to="/candidate/internship/attendance" icon={<CalendarCheck2 />} label="Attendance & leave" />
+              <QuickLink to="/candidate/internship/tasks" icon={<ListTodo />} label="My tasks" />
+              <QuickLink to="/candidate/internship/mcq" icon={<FileQuestion />} label="Weekly MCQs" />
+              <QuickLink to="/candidate/internship/coding" icon={<Code2 />} label="Coding platform" />
+              <QuickLink to="/candidate/internship/skills" icon={<TrendingUp />} label="My skill matrix" />
+              <QuickLink to="/candidate/internship/reviews" icon={<Award />} label="Monthly reviews" />
+            </nav>
           </div>
         </div>
       </div>
@@ -444,3 +230,464 @@ export function MenteeWorkspacePage() {
   );
 }
 
+// ------------------------------------------------------------------ sections
+
+function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-surface p-4">
+      <span className="text-xs text-muted">{label}</span>
+      <p className="mt-2 text-2xl font-semibold text-text">{value}</p>
+      <span className="text-[11px] text-muted">{hint}</span>
+    </div>
+  );
+}
+
+function QuickLink({ to, icon, label }: { to: string; icon: ReactNode; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-text hover:bg-surface-muted [&_svg]:size-3.5 [&_svg]:text-muted"
+    >
+      {icon}
+      <span>{label}</span>
+    </Link>
+  );
+}
+
+function PunchWidget({ fullDayHours }: { fullDayHours?: number }) {
+  const qc = useQueryClient();
+  const att = useQuery({
+    queryKey: ["internship", "attendance", "current"],
+    queryFn: () => internshipApi.myAttendance(),
+    refetchInterval: 60_000,
+  });
+  const today: AttendanceDay | undefined = att.data?.today;
+  const openSession = today?.sessions.find((s) => !s.punch_out_at);
+  const now = useNow(!!openSession);
+  const tz = att.data?.rules.timezone;
+  const full = att.data?.rules.full_day_hours ?? fullDayHours;
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["internship", "attendance"] });
+    qc.invalidateQueries({ queryKey: ["internship", "me"] });
+  };
+  const punchIn = useMutation({ mutationFn: () => internshipApi.punchIn(), onSuccess: invalidate });
+  const punchOut = useMutation({ mutationFn: () => internshipApi.punchOut(), onSuccess: invalidate });
+  const actionError = punchIn.error ?? punchOut.error;
+
+  return (
+    <div className="mt-5 rounded-xl border border-border bg-surface-muted p-4">
+      {att.isPending ? (
+        <LoadingState rows={1} label="Loading today's attendance" />
+      ) : att.isError ? (
+        <ErrorState message={errorMessage(att.error)} onRetry={() => att.refetch()} />
+      ) : (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-primary-50 p-2.5 text-primary-700">
+              <CalendarCheck2 className="size-5" aria-hidden="true" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-text">Today's attendance</h3>
+                {today && <Badge tone={DAY_TONE[today.status]}>{today.status}</Badge>}
+              </div>
+              <p className="mt-0.5 text-xs text-muted">
+                {openSession ? (
+                  <>
+                    Punched in at {fmtTime(openSession.punch_in_at, tz)} · current session{" "}
+                    <span className="font-mono font-semibold text-text" aria-live="off">
+                      {fmtElapsed(now - new Date(openSession.punch_in_at).getTime())}
+                    </span>
+                  </>
+                ) : today && today.sessions.length > 0 ? (
+                  "Punched out. Punch in again if you resume work today."
+                ) : (
+                  "You haven't punched in yet today."
+                )}
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Logged today: <strong className="text-text">{today?.total_hours ?? 0} h</strong>
+                {full != null && <> of {full} h for a full day</>}
+                {openSession && " (updates every minute)"}
+              </p>
+              {today?.status === "Needs Correction" && (
+                <p className="mt-1 text-xs text-warning-800">
+                  A punch-out was missed. Your mentor will confirm the correct time.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {openSession ? (
+              <Button variant="secondary" onClick={() => punchOut.mutate()} disabled={punchOut.isPending}>
+                <LogOut aria-hidden="true" />
+                <span>{punchOut.isPending ? "Punching out…" : "Punch Out"}</span>
+              </Button>
+            ) : (
+              <Button onClick={() => punchIn.mutate()} disabled={punchIn.isPending}>
+                <Clock aria-hidden="true" />
+                <span>{punchIn.isPending ? "Punching in…" : "Punch In"}</span>
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {actionError && (
+        <div className="mt-3">
+          <ErrorState message={errorMessage(actionError)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StandupCard({ tasks }: { tasks: InternTask[] }) {
+  const qc = useQueryClient();
+  const standup = useQuery({ queryKey: ["internship", "standup", "today"], queryFn: internshipApi.standupToday });
+  const [skipped, setSkipped] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<{ yesterday: string; today: string; blockers: string; task_id: string } | null>(null);
+
+  // Prefill once data arrives (from an existing entry, or the server's suggestion).
+  useEffect(() => {
+    if (!standup.data || form) return;
+    const { entry, suggested } = standup.data;
+    setForm(
+      entry
+        ? { yesterday: entry.yesterday, today: entry.today, blockers: entry.blockers, task_id: entry.task_id ?? "" }
+        : { yesterday: suggested.yesterday, today: "", blockers: "", task_id: suggested.task_id ?? "" },
+    );
+  }, [standup.data, form]);
+
+  const submit = useMutation({
+    mutationFn: (f: { yesterday: string; today: string; blockers: string; task_id: string }) =>
+      internshipApi.submitStandup({ ...f, task_id: f.task_id || null }),
+    onSuccess: (res) => {
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ["internship", "standup"] });
+      if (res.copilot) qc.invalidateQueries({ queryKey: ["internship", "blocker"] });
+      qc.invalidateQueries({ queryKey: ["internship", "tasks"] });
+    },
+  });
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (form) submit.mutate(form);
+  };
+
+  const entry = standup.data?.entry;
+  const openTasks = tasks.filter((t) => t.status !== "Done");
+
+  return (
+    <section className="rounded-xl border border-border bg-surface p-5 shadow-sm" aria-labelledby="standup-h">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 id="standup-h" className="flex items-center gap-2 text-sm font-semibold text-text">
+          <MessageSquare className="size-4 text-muted" aria-hidden="true" />
+          Daily standup
+        </h2>
+        {entry && !editing && (
+          <Badge tone="success">
+            <CheckCircle2 className="size-3" aria-hidden="true" />
+            Posted today
+          </Badge>
+        )}
+      </div>
+
+      {standup.isPending ? (
+        <LoadingState rows={3} label="Loading standup" />
+      ) : standup.isError ? (
+        <ErrorState message={errorMessage(standup.error)} onRetry={() => standup.refetch()} />
+      ) : skipped && !entry ? (
+        <div className="flex items-center justify-between gap-2 rounded-lg bg-surface-muted p-3 text-xs text-muted">
+          <span>Standup skipped for now.</span>
+          <Button variant="ghost" size="sm" onClick={() => setSkipped(false)}>
+            Write it now
+          </Button>
+        </div>
+      ) : entry && !editing ? (
+        <dl className="space-y-2 text-xs">
+          <StandupLine label="Yesterday" value={entry.yesterday} />
+          <StandupLine label="Today" value={entry.today} />
+          <StandupLine label="Blockers" value={entry.blockers || "None"} />
+          {entry.task_title && <StandupLine label="Task" value={entry.task_title} />}
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+            Edit today's standup
+          </Button>
+        </dl>
+      ) : form ? (
+        <form onSubmit={onSubmit} className="space-y-3">
+          <div>
+            <Label htmlFor="su-y">What did you do yesterday?</Label>
+            <Textarea
+              id="su-y"
+              rows={2}
+              className="min-h-0"
+              value={form.yesterday}
+              onChange={(e) => setForm({ ...form, yesterday: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label htmlFor="su-t">What will you do today?</Label>
+            <Textarea
+              id="su-t"
+              rows={2}
+              className="min-h-0"
+              required
+              value={form.today}
+              onChange={(e) => setForm({ ...form, today: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label htmlFor="su-b">Anything blocking you? (the Co-Pilot will try to help)</Label>
+            <Textarea
+              id="su-b"
+              rows={2}
+              className="min-h-0"
+              value={form.blockers}
+              onChange={(e) => setForm({ ...form, blockers: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label htmlFor="su-task">Main task today</Label>
+            <Select
+              id="su-task"
+              className="w-full"
+              value={form.task_id}
+              onChange={(e) => setForm({ ...form, task_id: e.target.value })}
+            >
+              <option value="">No specific task</option>
+              {openTasks.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.title}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {submit.isError && <ErrorState message={errorMessage(submit.error)} />}
+          <div className="flex items-center justify-end gap-2">
+            {entry ? (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+            ) : (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSkipped(true)}>
+                Skip for now
+              </Button>
+            )}
+            <Button type="submit" size="sm" disabled={submit.isPending}>
+              {submit.isPending ? "Posting…" : "Post standup"}
+            </Button>
+          </div>
+        </form>
+      ) : null}
+
+      {submit.data?.copilot && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-muted">The Co-Pilot looked at your blocker:</p>
+          <CopilotAnswer answer={submit.data.copilot} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StandupLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="font-medium text-muted">{label}</dt>
+      <dd className="whitespace-pre-wrap text-text">{value || "—"}</dd>
+    </div>
+  );
+}
+
+function CopilotAnswer({ answer }: { answer: BlockerAnswer }) {
+  return (
+    <div className="rounded-xl border border-ai-100 bg-ai-50 p-4 text-xs">
+      <Badge tone="ai">
+        <Sparkles className="size-3" aria-hidden="true" />
+        Blocker Co-Pilot
+      </Badge>
+      <p className="mt-2 whitespace-pre-wrap text-text">{answer.answer}</p>
+      {answer.citations.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-muted">Sources:</span>
+          {answer.citations.map((c) => (
+            <span
+              key={c.id}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] text-muted"
+            >
+              <BookOpen className="size-3" aria-hidden="true" />
+              {c.title}
+            </span>
+          ))}
+        </div>
+      )}
+      {answer.escalated && (
+        <div role="status" className="mt-3 flex items-start gap-2 rounded-lg bg-warning-50 p-2.5 text-warning-800">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            The Co-Pilot couldn't fully resolve this from the docs, so <strong>your mentor has been alerted</strong> and
+            will follow up with you.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BlockerCopilotCard({ tasks }: { tasks: InternTask[] }) {
+  const qc = useQueryClient();
+  const [question, setQuestion] = useState("");
+  const [taskId, setTaskId] = useState("");
+  const history = useQuery({ queryKey: ["internship", "blocker", "history"], queryFn: () => internshipApi.blockerHistory() });
+  const ask = useMutation({
+    mutationFn: () => internshipApi.askBlocker(question.trim(), taskId || null),
+    onSuccess: () => {
+      setQuestion("");
+      qc.invalidateQueries({ queryKey: ["internship", "blocker"] });
+    },
+  });
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (question.trim().length >= 3) ask.mutate();
+  };
+
+  const openTasks = tasks.filter((t) => t.status !== "Done");
+  const recent = (history.data ?? []).filter((h) => h.id !== ask.data?.id).slice(0, 5);
+
+  return (
+    <section className="rounded-xl border border-border bg-surface p-5 shadow-sm" aria-labelledby="copilot-h">
+      <h2 id="copilot-h" className="mb-1 flex items-center gap-2 text-sm font-semibold text-text">
+        <Sparkles className="size-4 text-ai-500" aria-hidden="true" />
+        Blocker Co-Pilot
+      </h2>
+      <p className="mb-3 text-xs text-muted">
+        Stuck? Ask here first. Answers come from your cohort's docs; if it can't help, your mentor is alerted.
+      </p>
+
+      <form onSubmit={onSubmit} className="space-y-2">
+        <Label htmlFor="cp-q" className="sr-only">
+          Your question
+        </Label>
+        <Textarea
+          id="cp-q"
+          rows={3}
+          className="min-h-0"
+          placeholder="e.g. My API call returns 401 after login — what am I missing?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Label htmlFor="cp-task" className="sr-only">
+            Related task
+          </Label>
+          <Select id="cp-task" className="flex-1" value={taskId} onChange={(e) => setTaskId(e.target.value)}>
+            <option value="">Not about a specific task</option>
+            {openTasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </Select>
+          <Button type="submit" variant="secondary" disabled={ask.isPending || question.trim().length < 3}>
+            <Send aria-hidden="true" />
+            {ask.isPending ? "Asking…" : "Ask"}
+          </Button>
+        </div>
+      </form>
+
+      {ask.isError && (
+        <div className="mt-3">
+          <ErrorState message={errorMessage(ask.error)} />
+        </div>
+      )}
+      {ask.data && (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-medium text-text">You asked: {ask.data.question}</p>
+          <CopilotAnswer answer={ask.data} />
+        </div>
+      )}
+
+      <div className="mt-5 border-t border-border pt-3">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Recent questions</h3>
+        {history.isPending ? (
+          <LoadingState rows={2} label="Loading Co-Pilot history" />
+        ) : history.isError ? (
+          <ErrorState message={errorMessage(history.error)} onRetry={() => history.refetch()} />
+        ) : recent.length === 0 ? (
+          <p className="text-xs text-muted">No earlier questions yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {recent.map((h) => (
+              <li key={h.id}>
+                <details className="rounded-lg border border-border p-2.5 text-xs">
+                  <summary className="flex cursor-pointer items-center justify-between gap-2">
+                    <span className="truncate font-medium text-text">{h.question}</span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {h.escalated && <Badge tone="warning">Mentor alerted</Badge>}
+                      <span className="text-muted">{new Date(h.created_at).toLocaleDateString()}</span>
+                    </span>
+                  </summary>
+                  <div className="mt-2">
+                    <CopilotAnswer answer={h} />
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CurrentTasks({
+  query,
+}: {
+  query: { isPending: boolean; isError: boolean; error: unknown; data: InternTask[] | undefined; refetch: () => unknown };
+}) {
+  if (query.isPending) return <LoadingState rows={3} label="Loading tasks" />;
+  if (query.isError) return <ErrorState message={errorMessage(query.error)} onRetry={() => query.refetch()} />;
+  const current = (query.data ?? []).filter((t) => t.status !== "Done");
+  if (current.length === 0) return <EmptyState message="No open tasks right now. Your mentor will assign the next one." />;
+  return (
+    <div className="space-y-3">
+      {current.slice(0, 4).map((task) => (
+        <div key={task.id} className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone="neutral">
+                  Month {task.month_number} · Week {task.week_number}
+                </Badge>
+                <h3 className="text-xs font-semibold text-text">{task.title}</h3>
+                <Badge tone={TASK_TONE[task.status]}>{task.status}</Badge>
+                {task.flagged_blocked_at && <Badge tone="warning">Flagged blocked</Badge>}
+              </div>
+              {task.description && <p className="mt-1.5 line-clamp-2 text-xs text-muted">{task.description}</p>}
+              <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[11px] text-muted">
+                {task.skill_area && (
+                  <span>
+                    Area: <strong className="text-text">{task.skill_area}</strong>
+                  </span>
+                )}
+                <span>
+                  Due: <strong className="text-text">{task.due_date ?? "—"}</strong>
+                </span>
+                <span>
+                  Priority: <strong className="text-text">{task.priority}</strong>
+                </span>
+              </div>
+            </div>
+            <Button asChild variant="secondary" size="sm" className="shrink-0">
+              <Link to="/candidate/internship/tasks">View / Submit →</Link>
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

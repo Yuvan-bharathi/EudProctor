@@ -1,289 +1,379 @@
-import {
-  Award,
-  CheckCircle2,
-  FileText,
-  Sparkles,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Award, CheckCircle2, ClipboardList, FileText, Target, TrendingUp } from "lucide-react";
+import { useState } from "react";
 import { usePageTitle } from "@/app/layouts";
-import { useAuth } from "@/features/auth/store";
-import {
-  getInternshipMenteeForUser,
-  getPersistedMonthlyReviews,
-  saveMonthlyReview,
-} from "@/lib/mockData";
-import type { MonthlyReviewRecord } from "@/lib/types";
+import { EmptyState, ErrorState, LoadingState } from "@/components/States";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label, Textarea } from "@/components/ui/input";
+import { errorMessage } from "@/lib/api";
+import { internshipApi, type Appraisal, type AppraisalContent, type AppraisalMetrics } from "@/lib/internshipApi";
+import { SKILL_LEVEL_LABELS, type SkillLevel } from "@/lib/types";
 
-export function MenteeMonthlyReviewsPage() {
-  usePageTitle("Monthly Reviews & Growth");
-  const { user } = useAuth();
-  const mentee = getInternshipMenteeForUser(user);
-  const menteeId = mentee.id;
-  const [reviews, setReviews] = useState<MonthlyReviewRecord[]>(() =>
-    getPersistedMonthlyReviews(),
-  );
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+const MILESTONES = [30, 60, 90] as const;
 
-  useEffect(() => {
-    const handleRevUpdate = () => setReviews(getPersistedMonthlyReviews());
-    window.addEventListener("eduproctor_reviews_updated", handleRevUpdate);
-    return () => {
-      window.removeEventListener("eduproctor_reviews_updated", handleRevUpdate);
-    };
-  }, []);
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+}
 
-  const myReviews = reviews.filter((r) => r.menteeId === menteeId);
-  const [selectedMonth, setSelectedMonth] = useState<1 | 2 | 3>(2);
+function pct(v: number | null | undefined): string {
+  return v == null ? "Not available" : `${v}%`;
+}
 
-  const activeReview =
-    myReviews.find((r) => r.monthNumber === selectedMonth) || myReviews[0];
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const handleAcknowledge = () => {
-    if (!activeReview) return;
-    const updated: MonthlyReviewRecord = {
-      ...activeReview,
-      status: "acknowledged",
-      menteeAcknowledgedAt: new Date().toISOString(),
-    };
-    saveMonthlyReview(updated);
-    showToast(`Acknowledged Month ${activeReview.monthNumber} Review! Goals adopted for next month.`);
-  };
-
+function MetricTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="space-y-6">
-      {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg animate-in fade-in slide-in-from-top-3">
-          <CheckCircle2 className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+    <div className="rounded-lg border border-border bg-surface-muted p-3 text-center">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</span>
+      <p className="mt-1 text-lg font-bold text-text">{value}</p>
+      {hint && <p className="text-[11px] text-muted">{hint}</p>}
+    </div>
+  );
+}
 
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+function List({ items, empty }: { items: string[]; empty: string }) {
+  if (items.length === 0) return <p className="text-sm text-muted">{empty}</p>;
+  return (
+    <ul className="list-disc space-y-1.5 pl-5 text-sm text-text">
+      {items.map((it, i) => (
+        <li key={i}>{it}</li>
+      ))}
+    </ul>
+  );
+}
+
+function MetricsSection({ metrics }: { metrics: AppraisalMetrics }) {
+  const b = metrics.breakdown;
+  return (
+    <Card>
+      <CardHeader>
         <div>
-          <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-            <Award className="size-3.5" />
-            <span>Monthly Performance Calibration</span>
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 mt-1 sm:text-2xl">
-            My Monthly Reviews & Scorecards
-          </h1>
-          <p className="text-xs text-slate-500">
-            Transparent 5-pillar evaluations scored by your manager (MCQ 25%, Coding 30%, Comm 20%, Tasks 20%, Attendance 5%).
-          </p>
+          <CardTitle className="flex items-center gap-1.5">
+            <TrendingUp className="size-4 text-muted" aria-hidden="true" />
+            Your numbers for this period
+          </CardTitle>
+          <CardDescription>
+            Calculated from your records between {formatDate(metrics.window.start)} and{" "}
+            {formatDate(metrics.window.end)}.
+          </CardDescription>
         </div>
+      </CardHeader>
 
-        {/* Month Selector Tabs */}
-        <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-          {([1, 2, 3] as const).map((m) => {
-            const hasReview = myReviews.some((r) => r.monthNumber === m);
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setSelectedMonth(m)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-                  selectedMonth === m
-                    ? "bg-white text-emerald-800 shadow-2xs"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                Month {m} {hasReview ? "✔" : "(Upcoming)"}
-              </button>
-            );
-          })}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+        <div className="rounded-lg border border-primary-200 bg-primary-50 p-3 text-center sm:col-span-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">Composite score</span>
+          <p className="mt-1 text-3xl font-bold text-primary-700">{pct(metrics.composite_score_pct)}</p>
+          {metrics.composite_note && <p className="mt-0.5 text-[11px] text-primary-700">{metrics.composite_note}</p>}
+        </div>
+        <MetricTile label="Weekly checks" value={pct(b.mcqScorePct)} />
+        <MetricTile label="Tasks" value={pct(b.tasksScorePct)} />
+        <MetricTile label="Attendance" value={pct(b.attendanceScorePct)} />
+        <div className="grid grid-cols-1 gap-3">
+          <div className="rounded-lg border border-border bg-surface-muted p-2 text-center">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">Coding</span>
+            <p className="text-xs text-text">Assessed by your mentor</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-muted p-2 text-center">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">Communication</span>
+            <p className="text-xs text-text">Assessed by your mentor</p>
+          </div>
         </div>
       </div>
 
-      {activeReview ? (
-        <div className="space-y-6">
-          {/* Top Banner Card: Composite Score and Acknowledge */}
-          <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Month {activeReview.monthNumber} Performance Evaluation
-                  </h2>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                      activeReview.status === "acknowledged"
-                        ? "bg-emerald-100 text-emerald-800"
-                        : activeReview.status === "approved"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {activeReview.status === "acknowledged"
-                      ? "Acknowledged by You"
-                      : activeReview.status === "approved"
-                        ? "Published by Manager"
-                        : "Draft"}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  Manager: {activeReview.managerName} · Evaluated against track standards
-                </p>
-              </div>
+      <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-2 border-t border-border pt-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Attendance rate</dt>
+          <dd className="font-medium text-text">{pct(metrics.attendance.rate_pct)}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Days worked</dt>
+          <dd className="font-medium text-text">{metrics.attendance.days_worked}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Average hours on worked days</dt>
+          <dd className="font-medium text-text">{metrics.attendance.avg_hours_on_worked_days}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Tasks done</dt>
+          <dd className="font-medium text-text">
+            {metrics.tasks.done} of {metrics.tasks.assigned}
+            {metrics.tasks.done_pct != null && ` (${metrics.tasks.done_pct}%)`}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Tasks in review</dt>
+          <dd className="font-medium text-text">{metrics.tasks.in_review}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Weekly checks taken</dt>
+          <dd className="font-medium text-text">{metrics.quizzes.taken}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Weekly check average</dt>
+          <dd className="font-medium text-text">{pct(metrics.quizzes.avg_score_pct)}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Code reviews published</dt>
+          <dd className="font-medium text-text">{metrics.code_reviews_published}</dd>
+        </div>
+      </dl>
 
-              <div>
-                {activeReview.status === "approved" ? (
-                  <button
-                    type="button"
-                    onClick={handleAcknowledge}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 cursor-pointer"
-                  >
-                    <CheckCircle2 className="size-4" />
-                    <span>Acknowledge Review & Adopt Goals</span>
-                  </button>
-                ) : activeReview.status === "acknowledged" ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800">
-                    <CheckCircle2 className="size-4 text-emerald-600" />
-                    <span>Acknowledged on {activeReview.menteeAcknowledgedAt ? new Date(activeReview.menteeAcknowledgedAt).toLocaleDateString() : "today"}</span>
+      {metrics.skills.length > 0 && (
+        <div className="mt-5 border-t border-border pt-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Skills at review time</h3>
+          <ul className="flex flex-wrap gap-2">
+            {metrics.skills.map((s) => (
+              <li key={s.skill}>
+                <Badge tone={s.level != null ? "primary" : "neutral"}>
+                  {s.skill}:{" "}
+                  {s.level != null
+                    ? `Level ${s.level} (${SKILL_LEVEL_LABELS[s.level as SkillLevel] ?? ""})`
+                    : "Insufficient data"}{" "}
+                  · {s.score_pct}%
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ContentSection({ content, milestone }: { content: AppraisalContent; milestone: number }) {
+  // mentor_brief is the mentor's private 1:1 prep note and is deliberately never rendered here.
+  const scaffold = content.self_appraisal_scaffold;
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card className="space-y-5">
+        <div>
+          <CardTitle className="flex items-center gap-1.5">
+            <FileText className="size-4 text-muted" aria-hidden="true" />
+            Summary from your mentor
+          </CardTitle>
+          <p className="mt-2 whitespace-pre-line rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text">
+            {content.qualitative_summary}
+          </p>
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-success-700">Strengths</h3>
+          <List items={content.strengths} empty="None listed." />
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-warning-800">Growth areas</h3>
+          <List items={content.growth_areas} empty="None listed." />
+        </div>
+      </Card>
+
+      <Card className="space-y-5">
+        <div>
+          <CardTitle className="flex items-center gap-1.5">
+            <Target className="size-4 text-muted" aria-hidden="true" />
+            Goals after Day {milestone}
+          </CardTitle>
+          {content.next_goals.length === 0 ? (
+            <p className="mt-2 text-sm text-muted">No goals listed.</p>
+          ) : (
+            <ol className="mt-3 space-y-2">
+              {content.next_goals.map((goal, i) => (
+                <li
+                  key={i}
+                  className="flex items-start gap-2.5 rounded-lg border border-border bg-surface-muted p-2.5 text-sm text-text"
+                >
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary-100 text-[11px] font-bold text-primary-700">
+                    {i + 1}
                   </span>
-                ) : (
-                  <span className="text-xs text-slate-400">
-                    Pending manager sign-off
-                  </span>
-                )}
-              </div>
+                  <span>{goal}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <CardTitle className="flex items-center gap-1.5 text-sm">
+            <ClipboardList className="size-4 text-muted" aria-hidden="true" />
+            Self-appraisal prompts
+          </CardTitle>
+          <CardDescription className="mt-0.5">Use these to prepare for your review conversation.</CardDescription>
+          <div className="mt-3 space-y-3">
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-muted">Accomplishments</h4>
+              <List items={scaffold?.accomplishments ?? []} empty="None listed." />
             </div>
-
-            {/* 5-Pillar Scorecard Breakdown Grid */}
-            <div className="mt-5 grid grid-cols-2 gap-3 pt-4 border-t border-slate-100 sm:grid-cols-6">
-              <div className="rounded-lg bg-emerald-50/70 p-3 text-center border border-emerald-200 sm:col-span-2">
-                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
-                  Composite Graduation Score
-                </span>
-                <p className="mt-1 text-3xl font-black text-emerald-800">
-                  {activeReview.compositeScorePct}%
-                </p>
-                <p className="text-[10px] text-emerald-700 mt-0.5">5-Pillar Weighted Score</p>
-              </div>
-
-              <div className="rounded-lg bg-slate-50 p-3 text-center border border-slate-200/80">
-                <span className="text-[10px] font-semibold text-slate-500 uppercase">MCQ (25%)</span>
-                <p className="mt-1 text-xl font-bold text-slate-900">
-                  {activeReview.breakdown.mcqScorePct}%
-                </p>
-                <p className="text-[10px] text-slate-400">Proctored</p>
-              </div>
-
-              <div className="rounded-lg bg-slate-50 p-3 text-center border border-slate-200/80">
-                <span className="text-[10px] font-semibold text-slate-500 uppercase">Coding (30%)</span>
-                <p className="mt-1 text-xl font-bold text-slate-900">
-                  {activeReview.breakdown.codingScorePct}%
-                </p>
-                <p className="text-[10px] text-slate-400">Sandbox tests</p>
-              </div>
-
-              <div className="rounded-lg bg-slate-50 p-3 text-center border border-slate-200/80">
-                <span className="text-[10px] font-semibold text-slate-500 uppercase">Comm (20%)</span>
-                <p className="mt-1 text-xl font-bold text-slate-900">
-                  {activeReview.breakdown.commScorePct}%
-                </p>
-                <p className="text-[10px] text-slate-400">Rubric score</p>
-              </div>
-
-              <div className="rounded-lg bg-slate-50 p-3 text-center border border-slate-200/80">
-                <span className="text-[10px] font-semibold text-slate-500 uppercase">Tasks (20%)</span>
-                <p className="mt-1 text-xl font-bold text-slate-900">
-                  {activeReview.breakdown.tasksScorePct}%
-                </p>
-                <p className="text-[10px] text-slate-400">PRs & Sprints</p>
-              </div>
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-muted">Challenges</h4>
+              <List items={scaffold?.challenges ?? []} empty="None listed." />
+            </div>
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-muted">Focus goals</h4>
+              <List items={scaffold?.focus_goals ?? []} empty="None listed." />
             </div>
           </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
 
-          {/* Qualitative Synthesis & Goals */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-              <div>
-                <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                  <Sparkles className="size-4 text-purple-600" />
-                  Performance Summary & Feedback
-                </h3>
-                <p className="mt-2 text-xs text-slate-700 leading-relaxed rounded-lg bg-slate-50 p-3">
-                  {activeReview.qualitativeSummary}
-                </p>
-              </div>
+function AcknowledgePanel({ appraisal }: { appraisal: Appraisal }) {
+  const qc = useQueryClient();
+  const [comment, setComment] = useState("");
+  const ack = useMutation({
+    mutationFn: () => internshipApi.acknowledgeAppraisal(appraisal.id, comment),
+    onSuccess: () => {
+      setComment("");
+      void qc.invalidateQueries({ queryKey: ["internship", "appraisals"] });
+    },
+  });
 
-              <div>
-                <h4 className="text-xs font-bold text-emerald-800 uppercase tracking-wider mb-2">
-                  Recognized Strengths
-                </h4>
-                <ul className="space-y-1.5 text-xs text-slate-700">
-                  {activeReview.strengths.map((str, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="text-emerald-600 mt-0.5">✔</span>
-                      <span>{str}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+  if (appraisal.status === "acknowledged") {
+    return (
+      <div className="space-y-2">
+        <p role="status" className="flex items-center gap-1.5 text-sm font-medium text-success-700">
+          <CheckCircle2 className="size-4" aria-hidden="true" />
+          You acknowledged this review on {formatDate(appraisal.acknowledged_at)}.
+        </p>
+        {appraisal.mentee_comment && (
+          <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-text">
+            <span className="mb-1 block text-xs font-semibold text-muted">Your comment</span>
+            <p className="whitespace-pre-line">{appraisal.mentee_comment}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
 
-              <div>
-                <h4 className="text-xs font-bold text-amber-800 uppercase tracking-wider mb-2">
-                  Growth Areas & Improvement
-                </h4>
-                <ul className="space-y-1.5 text-xs text-slate-700">
-                  {activeReview.growthAreas.map((ga, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="text-amber-600 mt-0.5">●</span>
-                      <span>{ga}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        ack.mutate();
+      }}
+    >
+      <div>
+        <Label htmlFor={`ack-comment-${appraisal.id}`}>Your comment (optional)</Label>
+        <Textarea
+          id={`ack-comment-${appraisal.id}`}
+          value={comment}
+          maxLength={4000}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Anything you'd like your mentor to know about this review"
+          disabled={ack.isPending}
+        />
+      </div>
+      {ack.isError && <ErrorState message={errorMessage(ack.error)} />}
+      <Button type="submit" disabled={ack.isPending}>
+        <CheckCircle2 aria-hidden="true" />
+        {ack.isPending ? "Acknowledging…" : "Acknowledge review"}
+      </Button>
+    </form>
+  );
+}
 
-            <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-              <div>
-                <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                  <FileText className="size-4 text-emerald-600" />
-                  Your Focus Goals for Month {activeReview.monthNumber + 1}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Agreed upon during 1-on-1 coaching with your manager
-                </p>
-
-                <div className="mt-3 space-y-2">
-                  {activeReview.nextMonthGoals.map((goal, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-800"
-                    >
-                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-800">
-                        {i + 1}
-                      </span>
-                      <span>{goal}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {activeReview.managerNotes && (
-                <div className="pt-3 border-t border-slate-100">
-                  <span className="font-semibold text-slate-700 text-xs block mb-1">
-                    Manager 1-on-1 Meeting Notes:
-                  </span>
-                  <p className="rounded-lg bg-emerald-50/60 p-2.5 text-xs text-emerald-900 border border-emerald-100">
-                    "{activeReview.managerNotes}"
-                  </p>
-                </div>
+function AppraisalView({ appraisal }: { appraisal: Appraisal }) {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-bold text-text">Day {appraisal.milestone_day} review</h2>
+              {appraisal.status === "acknowledged" ? (
+                <Badge tone="success">
+                  <CheckCircle2 className="size-3.5" aria-hidden="true" />
+                  Acknowledged
+                </Badge>
+              ) : (
+                <Badge tone="info">Published by your mentor</Badge>
               )}
             </div>
+            <p className="mt-1 text-sm text-muted">Published on {formatDate(appraisal.published_at)}</p>
+          </div>
+          <div className="w-full md:max-w-md">
+            <AcknowledgePanel key={appraisal.id} appraisal={appraisal} />
           </div>
         </div>
+      </Card>
+
+      <MetricsSection metrics={appraisal.metrics} />
+
+      {appraisal.content ? (
+        <ContentSection content={appraisal.content} milestone={appraisal.milestone_day} />
       ) : (
-        <div className="rounded-xl border border-slate-200/90 bg-white p-12 text-center text-slate-500 text-xs">
-          Review for Month {selectedMonth} has not been published yet by your manager.
+        <EmptyState message="Your mentor has not added written feedback to this review." />
+      )}
+    </div>
+  );
+}
+
+export function MenteeMonthlyReviewsPage() {
+  usePageTitle("Monthly Reviews & Growth");
+  const appraisalsQ = useQuery({
+    queryKey: ["internship", "appraisals"],
+    queryFn: () => internshipApi.appraisals(),
+  });
+  const [selected, setSelected] = useState<30 | 60 | 90 | null>(null);
+
+  const list = appraisalsQ.data ?? [];
+  const latest = list.length > 0 ? list[list.length - 1].milestone_day : null;
+  const milestone = selected ?? latest;
+  const active = list.find((a) => a.milestone_day === milestone);
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <Badge tone="primary">
+            <Award className="size-3.5" aria-hidden="true" />
+            Day 30 / 60 / 90 reviews
+          </Badge>
+          <h1 className="mt-1 text-xl font-bold tracking-tight text-text sm:text-2xl">My Reviews</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted">
+            Your mentor reviews your progress at Day 30, 60 and 90. A review appears here once your mentor has
+            approved and published it. The numbers are calculated from your attendance, tasks and weekly checks.
+          </p>
         </div>
+
+        {list.length > 0 && (
+          <div className="flex items-center gap-1 rounded-xl bg-surface-muted p-1" role="tablist" aria-label="Review">
+            {MILESTONES.map((m) => {
+              const has = list.some((a) => a.milestone_day === m);
+              const isActive = milestone === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setSelected(m)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 ${
+                    isActive ? "bg-surface text-primary-700 shadow-sm" : "text-muted hover:text-text"
+                  }`}
+                >
+                  Day {m}
+                  {!has && " (not yet)"}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {appraisalsQ.isPending ? (
+        <LoadingState rows={4} label="Loading reviews" />
+      ) : appraisalsQ.isError ? (
+        <ErrorState message={errorMessage(appraisalsQ.error)} onRetry={() => appraisalsQ.refetch()} />
+      ) : list.length === 0 ? (
+        <EmptyState message="No reviews yet. Your Day 30 review will appear here after your mentor publishes it." />
+      ) : active ? (
+        <AppraisalView appraisal={active} />
+      ) : (
+        <EmptyState message={`Your Day ${milestone} review has not been published yet.`} />
       )}
     </div>
   );

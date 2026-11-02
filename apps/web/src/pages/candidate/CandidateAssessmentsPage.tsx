@@ -7,7 +7,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
@@ -80,6 +80,10 @@ function writeCache(userId: string, list: MyAssessmentBackend[]) {
 export function CandidateAssessmentsPage() {
   usePageTitle("My Assessments");
   const [filter, setFilter] = useState<AssessmentFilter>("all");
+  const location = useLocation();
+  const [welcomeExam, setWelcomeExam] = useState<string | null>(
+    () => (location.state as { welcomeExam?: string } | null)?.welcomeExam ?? null,
+  );
   const auth = authStore.get();
   const userId = auth?.user?.id ?? "anonymous";
   // browser-only demo accounts have no server data; real candidates never see the local demo list
@@ -255,6 +259,30 @@ export function CandidateAssessmentsPage() {
         <h2 className="text-xl font-bold tracking-tight text-text">My Assessments</h2>
         <p className="text-xs text-muted">Track your upcoming tests, instructions, and completed performance reviews.</p>
       </div>
+
+      {/* Shown once, right after accepting an emailed invitation */}
+      {welcomeExam && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-xl border border-success-500/30 bg-success-50 p-4 text-sm text-success-700"
+        >
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <p>
+              Invitation accepted — you are signed in. Find <strong>{welcomeExam}</strong> below and click{" "}
+              <strong>View instructions &amp; pre-checks</strong> when the assessment window opens. Next time, sign in
+              with your username and password.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setWelcomeExam(null)}
+            className="shrink-0 text-xs font-medium underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-border pb-3">

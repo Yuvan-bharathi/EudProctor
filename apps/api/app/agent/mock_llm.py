@@ -126,6 +126,13 @@ class MockLLM:
         messages = kwargs["messages"]
         tin = sum(len(json.dumps(m, default=str)) for m in messages) // 4
         history = _tool_history(messages)
+        # Internship agents offer exactly one tool with tool_choice "auto" (newer models reject forced choice).
+        forced = (kwargs.get("tool_choice") or {}).get("name", "") or (next(iter(tools)) if len(tools) == 1 else "")
+        if forced.startswith("intern_"):
+            from app.agent.internship.mocks import BUILDERS
+
+            payload = json.loads(messages[-1]["content"])
+            return _resp([_use(forced, **BUILDERS[forced](payload))], tin)
         if "draft_evaluation_summary" in tools:
             return _resp(self._evaluation(history), tin)
         if "create_question_draft" in tools:

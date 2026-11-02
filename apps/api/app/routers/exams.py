@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
@@ -29,6 +29,7 @@ from app.models import (
 from app.models.session import ExamSession, SessionStatus
 from app.routers.courses import mentor_course_ids, require_course_mentor
 from app.schemas.exams import (
+    ImportedQuestionIn,
     ImportQuestionsIn,
     ImportCandidatesIn,
     AssignmentOut,
@@ -40,6 +41,14 @@ from app.schemas.exams import (
     ExamQuestionsIn,
     QuestionOut,
     SendLinksIn,
+)
+from app.services.credentials import (
+    ensure_candidate_password,
+    ensure_exam_code,
+    ensure_username,
+    generate_exam_code,
+    issue_password,
+    make_username,
 )
 from app.services.links import issue_link
 
@@ -124,6 +133,8 @@ def _assignment_out(a: ExamAssignment, c: User, s: ExamSession | None = None) ->
         candidate_id=c.id,
         candidate_name=c.name,
         candidate_email=c.email,
+        candidate_username=c.username,
+        candidate_phone=meta.get("candidate_phone"),
         link_sent_at=a.link_sent_at,
         link_used_at=a.link_used_at,
         link_expires_at=a.link_expires_at,
@@ -157,7 +168,11 @@ def _detail(db: Session, exam: Exam) -> ExamDetailOut:
             .options(selectinload(ExamQuestion.question).selectinload(Question.options))
         )
     ]
-    return ExamDetailOut(**_to_exam_out(db, exam).model_dump(), questions=qs, assignments=_assignments(db, exam))
+    return ExamDetailOut(
+        **_to_exam_out(db, exam).model_dump(),
+        questions=qs,
+        assignments=_assignments(db, exam),
+    )
 
 
 def _to_exam_out(db: Session, e: Exam) -> ExamOut:
@@ -173,6 +188,8 @@ def _to_exam_out(db: Session, e: Exam) -> ExamOut:
     )
     return ExamOut(
         id=e.id,
+        code=e.code,
+        pass_pct=e.pass_pct,
         course_id=e.course_id,
         title=e.title,
         duration_min=e.duration_min,
@@ -225,6 +242,8 @@ def create_exam(body: ExamIn, db: Session = Depends(get_db), user: User = Depend
         glance_min_s=s.glance_min_s,
         max_flags=s.max_flags,
     )
+    # Assessment ID shown in the UI and in invitation emails
+    exam.code = generate_exam_code(db)
     db.add(exam)
     db.commit()
     db.refresh(exam)
@@ -262,6 +281,102 @@ def put_exam_questions(
     exam = own_exam(db, mentor, exam_id)
     set_exam_questions(db, exam, body.question_ids)
     db.commit()
+    return _detail(db, exam)
+
+
+def _validate_question_input(body: ImportedQuestionIn) -> None:
+    if not body.body.strip():
+        raise HTTPException(422, "Question statement cannot be empty")
+    if len(body.options) < 2 or any(not o.text.strip() for o in body.options):
+        raise HTTPException(422, "Provide at least two answer options, all filled in")
+    if len({o.key.strip().upper() for o in body.options}) != len(body.options):
+        raise HTTPException(422, "Option keys must be unique")
+    if sum(1 for o in body.options if o.is_correct) != 1:
+        raise HTTPException(422, "Mark exactly one option as correct")
+    if not 1 <= body.difficulty <= 3:
+        raise HTTPException(422, "Difficulty must be 1 (easy), 2 (medium) or 3 (hard)")
+    if body.marks <= 0:
+        raise HTTPException(422, "Marks must be greater than 0")
+
+
+@router.put("/{exam_id}/questions/{question_id}", response_model=ExamDetailOut)
+def update_exam_question(
+    exam_id: uuid.UUID,
+    question_id: uuid.UUID,
+    body: ImportedQuestionIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(mentor_or_admin),
+):
+    """Edit a question inside this assessment (keeps its position).
+
+    Refused once any candidate has started, so answers always match the questions they were given.
+    A question also used by another assessment is copied first, so the other assessment is unchanged.
+    """
+    exam = own_exam(db, user, exam_id)
+    _validate_question_input(body)
+    link = db.scalar(
+        select(ExamQuestion).where(ExamQuestion.exam_id == exam.id, ExamQuestion.question_id == question_id)
+    )
+    if link is None:
+        raise HTTPException(404, "Question is not part of this assessment")
+    started = db.scalar(
+        select(exists().where(ExamSession.exam_id == exam.id, ExamSession.started_at.is_not(None)))
+    )
+    if started:
+        raise HTTPException(409, "Candidates have already started this assessment, so its questions can't be changed.")
+    has_sessions = db.scalar(select(exists().where(ExamSession.exam_id == exam.id)))
+
+    q = db.get(Question, question_id)
+    new_keys = {o.key.strip().upper() for o in body.options}
+    if has_sessions and new_keys != {o.key for o in q.options}:
+        # Opened (not yet started) sessions store a per-candidate option order by key.
+        raise HTTPException(
+            409, "Candidates have already opened their links, so the answer options (A, B, C...) can't be added or removed."
+        )
+
+    shared = db.scalar(
+        select(exists().where(ExamQuestion.question_id == q.id, ExamQuestion.exam_id != exam.id))
+    )
+    if shared:
+        if has_sessions:
+            raise HTTPException(
+                409,
+                "This question is also used in another assessment and candidates have opened this one. "
+                "Add the edited version as a new question instead.",
+            )
+        copy = Question(
+            course_id=q.course_id,
+            topic_id=q.topic_id,
+            type=q.type,
+            status=QuestionStatus.approved,
+            source=q.source,
+            created_by=user.id,
+            subtopic=q.subtopic,
+            difficulty=q.difficulty,
+            marks=q.marks,
+            body=q.body,
+        )
+        db.add(copy)
+        db.flush()
+        order = link.order
+        db.delete(link)
+        db.flush()
+        db.add(ExamQuestion(exam_id=exam.id, question_id=copy.id, order=order))
+        q = copy
+
+    q.body = body.body.strip()
+    q.difficulty = body.difficulty
+    q.marks = body.marks
+    if body.subtopic and body.subtopic.strip():
+        q.subtopic = body.subtopic.strip()
+    q.answer_text = (body.explanation or "").strip() or None
+    q.options.clear()
+    db.flush()
+    q.options.extend(
+        QuestionOption(key=o.key.strip().upper(), text=o.text.strip(), is_correct=o.is_correct) for o in body.options
+    )
+    db.commit()
+    db.expire_all()
     return _detail(db, exam)
 
 
@@ -342,6 +457,7 @@ def send_links(
 def resend_candidate_invitation(
     exam_id: uuid.UUID,
     candidate_id: uuid.UUID,
+    body: SendLinksIn | None = None,
     db: Session = Depends(get_db),
     mentor: User = Depends(mentor_or_admin),
 ):
@@ -349,13 +465,17 @@ def resend_candidate_invitation(
     exam = own_exam(db, mentor, exam_id)
     from app.agent.invitation_agent import run_invitation_agent
 
-    run_invitation_agent(
+    result = run_invitation_agent(
         db=db,
         exam_id=exam.id,
         mentor=mentor,
         force_resend=True,
         candidate_filter_ids=[str(candidate_id)],
+        test_mode=bool(body and body.test_mode),
+        test_recipient_override=body.test_recipient if body else None,
     )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
 
     a = db.scalar(
         select(ExamAssignment).where(
@@ -451,27 +571,43 @@ def import_exam_candidates(
     db: Session = Depends(get_db),
     user: User = Depends(mentor_or_admin),
 ):
-    """Persist imported candidates into TiDB Cloud (User, Course,
-    CourseMember, ExamAssignment)."""
+    """Enrol candidates: persist User, CourseMember and ExamAssignment rows.
+
+    Enrolment never emails by itself. Invitations go out when the assessment is
+    published (send-links). If the assessment is already published and
+    ``send_invitations`` is set, the Invitation Agent emails just these candidates.
+    """
     exam = own_exam(db, user, exam_id)
-    from app.core.security import hash_password
-    pw_hash = hash_password("candidatepassword")
+    from app.core.security import make_unusable_password
+
+    # Login credentials: username = candidate's name, password = unique to each candidate (emailed).
+    ensure_exam_code(db, exam)
+    enrolled_ids: list[str] = []
 
     for cand in body.candidates:
         email_clean = cand.email.strip().lower()
         if not email_clean:
             continue
         u = db.scalar(select(User).where(User.email == email_clean))
+        if u is not None and u.role != Role.candidate:
+            raise HTTPException(422, f"{email_clean} belongs to a {u.role.value} account and cannot be enrolled.")
         if u is None:
+            name = cand.name.strip() or "Candidate"
             u = User(
                 role=Role.candidate,
                 email=email_clean,
-                name=cand.name.strip() or "Candidate",
-                password_hash=pw_hash,
+                name=name,
+                username=make_username(db, name),
+                password_hash=make_unusable_password(),
                 is_active=True,
             )
+            issue_password(u)  # unique to this candidate
             db.add(u)
             db.flush()
+        else:
+            ensure_username(db, u)
+            # Existing account: issue a unique password only if they don't have their own.
+            ensure_candidate_password(u, exam)
 
         cm = db.scalar(
             select(CourseMember).where(
@@ -489,8 +625,57 @@ def import_exam_candidates(
                 ExamAssignment.candidate_id == u.id,
             )
         )
+        profile = {
+            k: v
+            for k, v in {
+                "candidate_phone": (cand.phone or "").strip() or None,
+                "roll_number": (cand.rollNumber or "").strip() or None,
+                "batch": (cand.batch or "").strip() or None,
+                "department": (cand.department or "").strip() or None,
+            }.items()
+            if v
+        }
         if ea is None:
-            db.add(ExamAssignment(exam_id=exam.id, candidate_id=u.id))
+            db.add(ExamAssignment(exam_id=exam.id, candidate_id=u.id, accommodations=profile))
+        elif profile:
+            ea.accommodations = {**(ea.accommodations or {}), **profile}
+        enrolled_ids.append(str(u.id))
 
     db.commit()
+
+    if body.send_invitations and enrolled_ids and exam.status == ExamStatus.scheduled and exam.questions:
+        from app.agent.invitation_agent import run_invitation_agent
+
+        run_invitation_agent(
+            db=db,
+            exam_id=exam.id,
+            mentor=user,
+            candidate_filter_ids=enrolled_ids,
+            test_mode=bool(body.test_mode),
+            test_recipient_override=body.test_recipient,
+        )
+        db.commit()
+
     return _assignments(db, exam)
+
+
+@router.delete("/{exam_id}/candidates/{candidate_id}", status_code=204)
+def remove_exam_candidate(
+    exam_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(mentor_or_admin),
+):
+    """Un-enrol a candidate. Refused once they have redeemed their link (session data exists)."""
+    exam = own_exam(db, user, exam_id)
+    a = db.scalar(
+        select(ExamAssignment).where(
+            ExamAssignment.exam_id == exam.id, ExamAssignment.candidate_id == candidate_id
+        )
+    )
+    if a is None:
+        raise HTTPException(404, "Candidate assignment not found")
+    if a.link_used_at is not None:
+        raise HTTPException(409, "Candidate has already started this assessment and cannot be removed")
+    db.delete(a)
+    db.commit()

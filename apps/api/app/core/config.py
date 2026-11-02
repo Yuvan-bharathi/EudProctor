@@ -47,6 +47,13 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     anthropic_model: str = ""
+    # Optional Anthropic-compatible gateway, e.g. https://openrouter.ai/api (OpenRouter's Messages API).
+    # When set, ANTHROPIC_API_KEY is sent as a Bearer token and ANTHROPIC_MODEL uses the gateway's ids
+    # (e.g. anthropic/claude-sonnet-5.5).
+    anthropic_base_url: str = ""
+    # Per-call output cap for the internship agents (includes adaptive thinking). Lower it if your
+    # gateway/credit limit rejects large requests (OpenRouter 402 "can only afford N tokens").
+    agent_max_tokens: int = 16000
     agent_llm: str = "anthropic"  # anthropic / mock (rule-based stand-in, dev and test only)
     # USD per million tokens, for the agent dashboard's cost estimate
     agent_price_in_per_mtok: float = 4.0
@@ -55,6 +62,12 @@ class Settings(BaseSettings):
 
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    # Credentials for a real relay (Gmail app password, SendGrid, SES, Brevo, ...).
+    # Leave blank for an unauthenticated local relay such as Mailpit.
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = False  # STARTTLS (usually port 587)
+    smtp_use_ssl: bool = False  # implicit TLS (usually port 465)
     mail_from: str = "no-reply@eduproctor.example.com"
     mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory
 
@@ -67,6 +80,19 @@ class Settings(BaseSettings):
     evidence_encryption_key: str = ""
     storage_dir: str = "storage"
     retention_days: int = 90
+
+    # ---- Internship flow (implementation plan, section 6.9 / 6.7) ----
+    internship_timezone: str = "Asia/Kolkata"  # default organisation time zone for new cohorts
+    full_day_hours: float = 8.0  # team decision: 8 hours of logged-in time = full day
+    half_day_hours: float = 4.0
+    stall_hours: float = 4.0  # in-progress task + punched in + no activity for this long -> mentor alert
+    max_submission_bytes: int = 200_000
+    max_submission_lines: int = 2000
+    weekly_quiz_questions: int = 5
+    min_questions_per_skill: int = 3  # skill level only classified after this many questions
+    langgraph_checkpointer: str = "sqlite"  # sqlite (dev, file under storage_dir) / memory (tests) / redis
+    internship_scheduler_interval_s: int = 900
+    max_mentees_per_mentor: int = 2  # matches the cohorts page ('strictly capped at 2')  # auto-close sessions, stall scan, weekly quiz & milestone drafts
 
     # proctoring policy (PRD section 4)
     glance_min_s: float = 1.0

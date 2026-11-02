@@ -24,6 +24,25 @@ from app.models.exam import (
     QuestionType,
     Topic,
 )
+from app.models.internship import (
+    AgentDraft,
+    Appraisal,
+    AttendanceSession,
+    BlockerQuestion,
+    CodeReview,
+    CohortDoc,
+    DraftStatus,
+    InternshipCohort,
+    InternshipEnrollment,
+    InternTask,
+    LeaveRequest,
+    SkillScore,
+    StallAlert,
+    StandupEntry,
+    TaskStatus,
+    TaskSubmission,
+    WeeklyQuiz,
+)
 from app.models.identity import CheckKind, CheckResult, FaceProfile, IdentityCheck, ReviewDecision
 from app.models.proctoring import CandidateFlag, FlagReview, GlanceLog, ProctorEvent
 from app.models.results import ItemStat, Result, SessionMisconception, TopicResult
@@ -31,6 +50,23 @@ from app.models.session import Answer, ExamSession, SessionStatus, SubmitReason
 from app.models.user import Course, CourseMember, MemberRole, Role, User
 
 __all__ = [
+    "AgentDraft",
+    "Appraisal",
+    "AttendanceSession",
+    "BlockerQuestion",
+    "CodeReview",
+    "CohortDoc",
+    "DraftStatus",
+    "InternshipCohort",
+    "InternshipEnrollment",
+    "InternTask",
+    "LeaveRequest",
+    "SkillScore",
+    "StallAlert",
+    "StandupEntry",
+    "TaskStatus",
+    "TaskSubmission",
+    "WeeklyQuiz",
     "EvaluationSummary",
     "Note",
     "NoteLevel",

@@ -1,6 +1,6 @@
 import { GraduationCap } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { ErrorState } from "@/components/States";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -57,19 +57,28 @@ export function LoginPage() {
         {/* Standard Credentials Form */}
         <form onSubmit={submit} className="space-y-4" noValidate>
           <div>
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">Username or email</Label>
             <Input
               id="email"
-              type="email"
+              type="text"
+              autoCapitalize="none"
               autoComplete="username"
-              placeholder="e.g. mentor1@example.com"
+              placeholder="e.g. tanu.shree or mentor1@example.com"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
           <div>
-            <Label htmlFor="password">Password</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <Link
+                to="/forgot-password"
+                className="text-xs font-medium text-primary-700 underline-offset-2 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <Input
               id="password"
               type="password"

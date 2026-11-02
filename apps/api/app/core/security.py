@@ -34,6 +34,21 @@ def verify_password(password: str, stored: str) -> bool:
 # Used when the email is unknown so the response time does not reveal which accounts exist.
 DUMMY_HASH = hash_password("not-a-real-password")
 
+# Accounts created by enrolment have no usable password until the candidate sets one from
+# their invitation link. The "!" prefix can never verify (see verify_password).
+UNUSABLE_PASSWORD_PREFIX = "!"
+# Enrolment used to give every imported candidate this shared password; such accounts are
+# treated as "password not set yet" so the candidate must choose their own.
+_LEGACY_ENROLMENT_PASSWORD = "candidatepassword"
+
+
+def make_unusable_password() -> str:
+    return UNUSABLE_PASSWORD_PREFIX + secrets.token_urlsafe(24)
+
+
+def password_not_set(stored: str) -> bool:
+    return stored.startswith(UNUSABLE_PASSWORD_PREFIX) or verify_password(_LEGACY_ENROLMENT_PASSWORD, stored)
+
 
 def create_token(user_id: uuid.UUID, role: str, kind: str) -> str:
     s = get_settings()
@@ -76,3 +91,38 @@ def create_ws_ticket(user_id: uuid.UUID, exam_id: uuid.UUID) -> str:
 def sign_value(value: str) -> str:
     """HMAC used for link tokens etc. (stored hashed, never raw)."""
     return hmac.new(get_settings().jwt_secret.encode(), value.encode(), hashlib.sha256).hexdigest()
+
+
+# ---------------------------------------------------------------- password reset
+PASSWORD_RESET_TTL_MIN = 30
+
+
+def _password_fingerprint(password_hash: str) -> str:
+    # Changes whenever the password changes, so a reset link works only once.
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
+
+
+def create_password_reset_token(user_id: uuid.UUID, password_hash: str) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "type": "pwreset",
+        "pwf": _password_fingerprint(password_hash),
+        "iat": now,
+        "exp": now + timedelta(minutes=PASSWORD_RESET_TTL_MIN),
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(payload, get_settings().jwt_secret, algorithm="HS256")
+
+
+def reset_token_matches(payload: dict[str, Any], password_hash: str) -> bool:
+    return hmac.compare_digest(str(payload.get("pwf", "")), _password_fingerprint(password_hash))
+
+
+def check_password_strength(password: str) -> str | None:
+    """Returns a user-facing problem, or None if the password is acceptable."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        return "Password must contain at least one letter and one number."
+    return None

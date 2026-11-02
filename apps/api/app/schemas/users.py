@@ -13,13 +13,24 @@ class UserOut(ORM):
     id: uuid.UUID
     role: Role
     email: str
+    username: str | None = None
     name: str
     is_active: bool
 
 
 class LoginIn(BaseModel):
-    email: EmailStr
+    # Email address or username (candidates sign in with the username from their invitation email).
+    email: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=200)
+
+
+class ForgotPasswordIn(BaseModel):
+    identifier: str = Field(min_length=1, max_length=254)  # email or username
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=10, max_length=2000)
+    new_password: str = Field(min_length=1, max_length=128)
 
 
 class RefreshIn(BaseModel):

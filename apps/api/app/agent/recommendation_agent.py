@@ -309,9 +309,9 @@ def generate_recommendations(
         and settings.environment != "test"
     ):
         try:
-            import anthropic
+            from app.agent.llm import make_anthropic_client
 
-            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            client = make_anthropic_client(settings.anthropic_api_key, settings.anthropic_base_url)
             diff_label = {1: "Easy", 2: "Medium", 3: "Hard"}.get(difficulty, "Medium")
 
             prompt = f"""You are the AI Question Recommendation Agent for EduProctor Intelligence.

@@ -20,6 +20,7 @@ Guarantees:
 - 100% Human-in-the-Loop: only published assessments dispatch invitations.
 """
 
+import html
 import logging
 import re
 import secrets
@@ -33,6 +34,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import Exam, ExamAssignment, ExamStatus, User
 from app.models.base import utcnow
+from app.services.credentials import (
+    ensure_candidate_password,
+    ensure_exam_code,
+    ensure_username,
+)
 from app.services.links import token_hash
 from app.services.mailer import send_mail
 
@@ -126,6 +132,10 @@ class CandidateInvitationItem(TypedDict, total=False):
     candidate_id: str
     candidate_name: str
     candidate_email: str
+    candidate_username: str
+    # The candidate's own system-issued password to print in the email; None when the candidate
+    # set their own password (which is never emailed).
+    candidate_password: str | None
     is_valid_email: bool
     is_eligible: bool
     skip_reason: str | None
@@ -151,6 +161,7 @@ class InvitationAgentState(TypedDict, total=False):
 
     # Assessment Info
     assessment_title: str
+    assessment_code: str
     domain_subject: str
     duration_min: int
     total_questions: int
@@ -189,7 +200,9 @@ def assessment_published_trigger(state: InvitationAgentState) -> dict[str, Any]:
     if not exam:
         return {"error": "Assessment not found", "total_enrolled": 0, "status_summary": "Aborted: Assessment not found"}
 
-    if exam.status not in (ExamStatus.scheduled, ExamStatus.active):
+    # ExamStatus has no "active" member — referencing it raised AttributeError (HTTP 500)
+    # on every send. Only published (scheduled) assessments dispatch invitations.
+    if exam.status != ExamStatus.scheduled:
         return {
             "error": f"Assessment is not published (current status: {exam.status.value})",
             "total_enrolled": 0,
@@ -210,6 +223,7 @@ def assessment_published_trigger(state: InvitationAgentState) -> dict[str, Any]:
     return {
         "exam": exam,
         "assessment_title": exam.title,
+        "assessment_code": ensure_exam_code(db, exam),
         "domain_subject": course_name,
         "duration_min": exam.duration_min,
         "total_questions": len(exam.questions),
@@ -247,15 +261,22 @@ def fetch_enrolled_candidates(state: InvitationAgentState) -> dict[str, Any]:
 
     for a, user in rows:
         accomm = a.accommodations or {}
+        # Every invited candidate gets personal credentials: username = name, password = unique to them
+        # (unless they already chose their own).
+        username = ensure_username(db, user)
+        password = ensure_candidate_password(user, exam)
         enrolled_list.append({
             "assignment_id": str(a.id),
             "candidate_id": str(user.id),
             "candidate_name": user.name or "Candidate",
             "candidate_email": user.email.strip(),
+            "candidate_username": username,
+            "candidate_password": password,
             "status": accomm.get("invitation_status", "Not Sent" if not a.link_sent_at else "Sent"),
             "delivery_metadata": accomm,
         })
 
+    db.commit()
     return {
         "enrolled_candidates": enrolled_list,
         "total_enrolled": len(enrolled_list),
@@ -319,7 +340,17 @@ def check_existing_invitations(state: InvitationAgentState) -> dict[str, Any]:
         if expires_at and expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
 
-        if not force_resend and assignment.link_token_hash and expires_at and expires_at > now:
+        # A previous attempt that failed (or never finished) never reached the candidate: always retry it.
+        prev_status = (assignment.accommodations or {}).get("invitation_status")
+        delivered_before = prev_status not in ("Failed", "Sending", "Pending", "Not Sent")
+
+        if (
+            not force_resend
+            and delivered_before
+            and assignment.link_token_hash
+            and expires_at
+            and expires_at > now
+        ):
             c["status"] = assignment.accommodations.get("invitation_status", "Sent")
             c["skip_reason"] = "Valid active invitation already exists"
             continue
@@ -390,11 +421,25 @@ def generate_invitation_content(state: InvitationAgentState) -> dict[str, Any]:
     questions_count = state.get("total_questions", 0)
     marks = state.get("total_marks", 0)
     deadline = state.get("window_end", "See platform for deadline")
+    code = state.get("assessment_code", "")
+    login_url = f"{get_settings().web_base_url}/login"
+    forgot_url = f"{get_settings().web_base_url}/forgot-password"
 
     for c in eligible:
         candidate_name = c["candidate_name"]
         join_url = c["token_url"]
         expires_at = c.get("expires_at", deadline)
+        username = c["candidate_username"]
+        if c.get("candidate_password"):
+            pw_text = c["candidate_password"]
+            pw_html = f'<code style="font-size:14px;font-weight:700;color:#0f172a;">{html.escape(pw_text)}</code>'
+        else:
+            pw_text = f"(your existing password - forgot it? {forgot_url})"
+            pw_html = (
+                'Your existing password &middot; '
+                f'<a href="{forgot_url}" style="color:#0f766e;">Forgot password?</a>'
+            )
+        e_name, e_title, e_user = html.escape(candidate_name), html.escape(title), html.escape(username)
 
         # Plain Text Content
         plain_text = f"""Hello {candidate_name},
@@ -402,6 +447,7 @@ def generate_invitation_content(state: InvitationAgentState) -> dict[str, Any]:
 You have been officially invited to complete the following assessment on EduProctor Intelligence:
 
 Assessment: {title}
+Assessment ID: {code}
 Domain / Track: {subject_domain}
 Duration: {duration} minutes
 Questions: {questions_count} questions ({marks} total marks)
@@ -412,7 +458,18 @@ Instructions & Pre-Checks:
 - You will complete a brief 3-photo face enrolment, liveness check, and calibration.
 - The link below is single-use and strictly bound to your account.
 
-Open your unique assessment link to begin:
+YOUR LOGIN CREDENTIALS
+  Username: {username}
+  Password: {pw_text}
+(You can also sign in with your email address instead of the username.)
+
+How to start:
+1. Open your invitation link below (or go to {login_url}).
+2. Sign in with the username and password above.
+3. In the Candidate Portal open "My Assessments" and start the assessment when the window opens.
+Forgot your password? Reset it any time at {forgot_url}
+
+Accept your invitation:
 {join_url}
 
 Best regards,
@@ -438,10 +495,11 @@ EduProctor Intelligence Academic Team
     <!-- Body -->
     <div style="padding: 32px;">
       <p style="font-size: 15px; color: #1e293b; margin-top: 0;">
-        Hello <strong>{candidate_name}</strong>,
+        Hello <strong>{e_name}</strong>,
       </p>
       <p style="font-size: 14px; color: #475569; line-height: 1.6;">
-        You have been enrolled and scheduled to complete the assessment <strong>"{title}"</strong>.
+        You have been enrolled and scheduled to complete the assessment <strong>"{e_title}"</strong>
+        <span style="color:#64748b;">(Assessment ID: <strong>{code}</strong>)</span>.
       </p>
 
       <!-- Key Details Card -->
@@ -473,12 +531,39 @@ EduProctor Intelligence Academic Team
         </p>
       </div>
 
+      <!-- Login credentials -->
+      <div style="border: 1px solid #99f6e4; background-color: #f0fdfa; border-radius: 12px; padding: 16px 20px; margin: 0 0 24px 0;">
+        <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: 700; color: #115e59;">Your login credentials</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #334155;">
+          <tr>
+            <td style="padding: 4px 0; color: #64748b; width: 30%;">Username</td>
+            <td style="padding: 4px 0;"><code style="font-size:14px;font-weight:700;color:#0f172a;">{e_user}</code></td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #64748b;">Password</td>
+            <td style="padding: 4px 0;">{pw_html}</td>
+          </tr>
+        </table>
+        <p style="margin: 10px 0 0 0; font-size: 11px; color: #64748b;">You can also sign in with your email address instead of the username.</p>
+      </div>
+
+      <!-- How to start -->
+      <p style="font-size: 13px; font-weight: 700; color: #1e293b; margin: 0 0 8px 0;">How to start</p>
+      <ol style="font-size: 13px; color: #475569; line-height: 1.7; margin: 0 0 8px 0; padding-left: 20px;">
+        <li>Click <strong>Accept Invitation &amp; Sign In</strong> below.</li>
+        <li>Sign in with the username and password above.</li>
+        <li>In the <strong>Candidate Portal</strong>, open <em>My Assessments</em> and start the assessment when the window opens.</li>
+      </ol>
+
       <!-- Action Button CTA -->
       <div style="text-align: center; margin: 32px 0;">
         <a href="{join_url}" style="background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; display: inline-block; box-shadow: 0 2px 4px rgba(15,118,110,0.3);">
-          Accept Invitation & Begin Pre-Checks
+          Accept Invitation &amp; Sign In
         </a>
       </div>
+      <p style="font-size: 12px; color: #64748b; text-align: center; margin: -16px 0 24px 0;">
+        Forgot your password? <a href="{forgot_url}" style="color: #0f766e;">Reset it here</a>.
+      </p>
 
       <p style="font-size: 11px; color: #94a3b8; text-align: center; margin-bottom: 0;">
         If the button does not work, copy and paste this link into your browser:<br>
@@ -500,7 +585,7 @@ EduProctor Intelligence Academic Team
             "assignment_id": c["assignment_id"],
             "recipient_email": c["candidate_email"],
             "candidate_name": candidate_name,
-            "subject": f"Your Assessment Invitation: {title}",
+            "subject": f"Your Assessment Invitation: {title} ({code})",
             "plain_text": plain_text,
             "html_content": html_content,
         })
@@ -581,9 +666,15 @@ def update_delivery_status(state: InvitationAgentState) -> dict[str, Any]:
             aid = uuid.UUID(item["assignment_id"])
             assignment = db.get(ExamAssignment, aid)
             if assignment:
+                # The link never reached the candidate: invalidate it so the roster
+                # doesn't show a "Sent At" time and the next send issues a fresh token.
+                assignment.link_token_hash = None
+                assignment.link_sent_at = None
                 meta = dict(assignment.accommodations or {})
                 meta["invitation_status"] = "Failed"
                 meta["error"] = item.get("error")
+                if item.get("delivery_metadata"):
+                    meta["delivery_metadata"] = item["delivery_metadata"]
                 meta["updated_at"] = now.isoformat()
                 assignment.accommodations = meta
 
@@ -708,7 +799,10 @@ def run_invitation_agent(
     Returns the complete execution state and delivery summary.
     """
     s = get_settings()
-    is_test = test_mode or s.email_test_mode or (s.environment in ("dev", "test"))
+    # Test-inbox routing only when the mentor asked for it (UI toggle) or EMAIL_TEST_MODE=true.
+    # It is no longer forced just because ENVIRONMENT=dev — that silently redirected every
+    # invitation away from the real candidate.
+    is_test = bool(test_mode or s.email_test_mode)
 
     initial_state: InvitationAgentState = {
         "db": db,

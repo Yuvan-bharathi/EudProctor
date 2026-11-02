@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret")
 os.environ["ANTHROPIC_API_KEY"] = ""  # tests never depend on a developer .env
 os.environ["ANTHROPIC_MODEL"] = ""
+os.environ["ANTHROPIC_BASE_URL"] = ""  # never route tests through a real gateway
 os.environ["AGENT_LLM"] = "anthropic"
 os.environ["EVIDENCE_ENCRYPTION_KEY"] = "q3Jw2xkJ0Hk1nQh6c8bS7c3m3o2wQj0wWm3q2vYc9xU="  # test-only key
 os.environ["STORAGE_DIR"] = str(
