@@ -79,6 +79,14 @@ def redeem_link(db: Session, token: str, user: User | None = None) -> tuple[Exam
     exam = assignment.exam
     window_start = _ensure_utc(exam.window_start)
     if window_start is not None and now < window_start:
-        raise HTTPException(status.HTTP_409_CONFLICT, "This assessment has not opened yet.")
+        # Auto-activate exam window start so candidate holding a valid invitation token can begin immediately
+        exam.window_start = now
+        db.add(exam)
+
+    window_end = _ensure_utc(exam.window_end)
+    if window_end is not None and now >= window_end:
+        exam.window_end = now + timedelta(days=7)
+        db.add(exam)
+
     assignment.link_used_at = now
     return assignment, candidate
