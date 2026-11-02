@@ -169,8 +169,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.port, "0.0.0.0", () => {
   console.log(`[EmailService] Node.js Nodemailer microservice listening on http://0.0.0.0:${config.port}`);
-  console.log(`[EmailService] Mode: ${config.isExternal ? "EXTERNAL INTERNET SMTP (YOPmail / Real Inboxes)" : "LOCAL DEV MAILBOX (localhost:8025)"}`);
-  console.log(`[EmailService] Target SMTP -> ${config.smtp.host}:${config.smtp.port}`);
+  console.log(`[EmailService] Transport Mode: MAIL_MODE=${config.mailMode} (${config.isLocal ? "Local Mailpit SMTP 1025 / Web 8025" : "External SMTP Relay"})`);
+  console.log(`[EmailService] Target SMTP -> ${config.smtp.host}:${config.smtp.port} (secure: ${config.smtp.secure}, ignoreTLS: ${Boolean(config.smtp.ignoreTLS)})`);
 });
 
 process.on("SIGTERM", () => {

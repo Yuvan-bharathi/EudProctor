@@ -8,24 +8,25 @@ let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
-    if (config.isExternal && (!config.smtp.host || config.smtp.host === "127.0.0.1" || config.smtp.host === "localhost")) {
+    if (config.isSmtp && (!config.smtp.host || config.smtp.host === "127.0.0.1" || config.smtp.host === "localhost")) {
       throw new Error(
-        "EMAIL_MODE is set to 'external', but no external SMTP host is configured. " +
+        "MAIL_MODE is set to 'smtp', but no external SMTP host is configured. " +
         "Please configure EXTERNAL_SMTP_HOST, EXTERNAL_SMTP_USER, and EXTERNAL_SMTP_PASS in your .env file."
       );
     }
-    const modeLabel = config.isExternal ? "EXTERNAL INTERNET SMTP" : "LOCAL DEV MAILBOX";
-    console.log(`[EmailService] Initializing Nodemailer [${modeLabel}] -> ${config.smtp.host}:${config.smtp.port} (Auth: ${config.smtp.auth ? config.smtp.auth.user : 'none'})`);
+    const modeLabel = config.isSmtp ? "EXTERNAL SMTP" : "LOCAL MAILPIT";
+    console.log(`[EmailService] Nodemailer transport initialized [Mode: ${config.mailMode.toUpperCase()}] -> ${config.smtp.host}:${config.smtp.port} (secure: ${config.smtp.secure}, ignoreTLS: ${Boolean(config.smtp.ignoreTLS)}, auth: ${config.smtp.auth ? config.smtp.auth.user : 'none'})`);
     transporter = nodemailer.createTransport({
       host: config.smtp.host,
       port: config.smtp.port,
       secure: config.smtp.secure,
+      ignoreTLS: config.smtp.ignoreTLS,
       auth: config.smtp.auth,
       connectionTimeout: config.smtp.connectionTimeout,
       greetingTimeout: config.smtp.greetingTimeout,
       socketTimeout: config.smtp.socketTimeout,
       tls: {
-        rejectUnauthorized: false, // Permit local self-signed or dev certificates
+        rejectUnauthorized: false,
       },
     });
   }
@@ -106,7 +107,7 @@ async function sendInvitation({
   const mailer = getTransporter();
 
   try {
-    console.log(`[EmailService] Sending invitation via Nodemailer to: ${to} (Subject: ${mailOptions.subject})`);
+    console.log(`[EmailService] Mode: ${config.mailMode.toUpperCase()} | Dispatching to: ${to.trim()} | Subject: ${mailOptions.subject}`);
     const info = await mailer.sendMail(mailOptions);
 
     const actualMessageId = info.messageId || rawMessageId;
@@ -119,7 +120,7 @@ async function sendInvitation({
       rejected: info.rejected,
     });
 
-    console.log(`[EmailService] Sent successfully -> messageId: ${actualMessageId} | SMTP Response: ${smtpResponse}`);
+    console.log(`[EmailService] Mode: ${config.mailMode.toUpperCase()} | Sent successfully | Recipient: ${to.trim()} | MessageId: ${actualMessageId} | SMTP Response: ${smtpResponse}`);
 
     return {
       success: true,

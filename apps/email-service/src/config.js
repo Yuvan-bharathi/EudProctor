@@ -13,54 +13,59 @@ if (fs.existsSync(localEnv)) {
   dotenv.config({ path: localEnv, override: true });
 }
 
-// Determine Active Mode: "local" (default) or "external"
-const requestedMode = (process.env.EMAIL_MODE || (process.env.EXTERNAL_SMTP_HOST ? "external" : "local")).trim().toLowerCase();
-const isExternal = requestedMode === "external";
+// Determine Active Mode: "local" (default) or "smtp" (external)
+const rawMode = (process.env.MAIL_MODE || process.env.EMAIL_MODE || "local").trim().toLowerCase();
+const isSmtp = rawMode === "smtp" || rawMode === "external";
+const mailMode = isSmtp ? "smtp" : "local";
 
-// 1. Local Configuration (Dev Mailbox on http://localhost:8025 / SMTP 1025)
+// 1. Local Configuration (Mailpit on http://localhost:8025 / SMTP 1025)
 const localConfig = {
-  host: process.env.LOCAL_SMTP_HOST || (process.env.SMTP_HOST === "localhost" ? "127.0.0.1" : (process.env.SMTP_HOST || "127.0.0.1")),
-  port: parseInt(process.env.LOCAL_SMTP_PORT || (!isExternal ? process.env.SMTP_PORT : null) || "1025", 10),
+  host: process.env.LOCAL_SMTP_HOST || "localhost",
+  port: parseInt(process.env.LOCAL_SMTP_PORT || "1025", 10),
   secure: false,
+  ignoreTLS: true,
   auth: undefined,
   from: process.env.LOCAL_EMAIL_FROM || "EduProctor Intelligence <no-reply@eduproctor.example.com>",
 };
 
-// 2. External Configuration (Real Internet Delivery to YOPmail / Gmail)
-const externalHost = process.env.EXTERNAL_SMTP_HOST || (isExternal ? process.env.SMTP_HOST : null);
-const externalPort = parseInt(process.env.EXTERNAL_SMTP_PORT || (isExternal ? process.env.SMTP_PORT : null) || "587", 10);
-const externalSecure = process.env.EXTERNAL_SMTP_SECURE === "true" || externalPort === 465;
-const externalUser = process.env.EXTERNAL_SMTP_USER || (isExternal ? process.env.SMTP_USER : null);
-const externalPass = process.env.EXTERNAL_SMTP_PASS || (isExternal ? process.env.SMTP_PASS : null);
-const externalFrom = process.env.EXTERNAL_EMAIL_FROM || process.env.EMAIL_FROM || (externalUser ? `EduProctor Intelligence <${externalUser}>` : null);
+// 2. External Configuration (Real External SMTP Relay)
+const smtpHost = process.env.SMTP_HOST && process.env.SMTP_HOST !== "localhost" && process.env.SMTP_HOST !== "127.0.0.1"
+  ? process.env.SMTP_HOST
+  : process.env.EXTERNAL_SMTP_HOST;
+const smtpPort = parseInt(process.env.SMTP_PORT || process.env.EXTERNAL_SMTP_PORT || "587", 10);
+const smtpSecure = process.env.SMTP_SECURE === "true" || process.env.EXTERNAL_SMTP_SECURE === "true" || smtpPort === 465;
+const smtpUser = process.env.SMTP_USER || process.env.EXTERNAL_SMTP_USER;
+const smtpPass = process.env.SMTP_PASS || process.env.EXTERNAL_SMTP_PASS;
+const smtpFrom = process.env.EMAIL_FROM || process.env.EXTERNAL_EMAIL_FROM || (smtpUser ? `EduProctor Intelligence <${smtpUser}>` : null);
 
-const externalConfig = {
-  host: externalHost,
-  port: externalPort,
-  secure: externalSecure,
-  auth: externalUser && externalPass ? { user: externalUser, pass: externalPass } : undefined,
-  from: externalFrom || "EduProctor Intelligence <no-reply@eduproctor.example.com>",
+const smtpConfig = {
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure,
+  ignoreTLS: false,
+  auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+  from: smtpFrom || "EduProctor Intelligence <no-reply@eduproctor.example.com>",
 };
 
 // Active Selection
-const active = isExternal ? externalConfig : localConfig;
+const active = isSmtp ? smtpConfig : localConfig;
 
 module.exports = {
   port: parseInt(process.env.EMAIL_SERVICE_PORT || "5050", 10),
-  mode: isExternal ? "external" : "local",
-  isExternal,
+  mailMode,
+  isLocal: !isSmtp,
+  isSmtp,
   localConfig,
-  externalConfig,
+  smtpConfig,
   smtp: {
-    host: active.host || "127.0.0.1",
+    host: active.host === "localhost" ? "127.0.0.1" : (active.host || "127.0.0.1"),
     port: active.port || 1025,
     secure: Boolean(active.secure),
+    ignoreTLS: Boolean(active.ignoreTLS),
     auth: active.auth,
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 15000,
   },
   fromAddress: active.from,
-  testMode: process.env.EMAIL_TEST_MODE === "true",
-  testRecipient: process.env.EMAIL_TEST_RECIPIENT || "eduproctor-test@yopmail.com",
 };

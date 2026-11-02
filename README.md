@@ -35,6 +35,45 @@ Set `ENVIRONMENT=dev` for local development (the default is `production`, which 
 
 `IDENTITY_ENGINE=dev` (default) is a pixel comparison for development and tests. **It is not face recognition** and is refused outside dev/test. For real use install the extra (`uv sync --extra identity`) and set `IDENTITY_ENGINE=insightface`. Note that InsightFace's pretrained models are licensed for non-commercial use: obtain a licence or substitute a permissively licensed model before deploying.
 
+### Email Testing & Mailpit Setup
+
+EduProctor includes a dual-mode Node.js + Nodemailer microservice that works with Mailpit for local testing without modifying candidate email addresses:
+
+1. **Start Mailpit**:
+   - **With Docker**: `docker compose up -d mailpit`
+   - **Without Docker (Windows executable)**:
+     ```powershell
+     # Using winget:
+     winget install axllent.mailpit
+     mailpit.exe --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025
+     ```
+   - *Note: EduProctor's `python -m app.devserver` also includes a built-in wire-compatible SMTP (1025) & Web UI (8025) server.*
+
+2. **Set Local Mode in `.env`**:
+   ```env
+   MAIL_MODE=local
+   LOCAL_SMTP_HOST=localhost
+   LOCAL_SMTP_PORT=1025
+   ```
+
+3. **Restart the Email Service & Backend**:
+   ```bash
+   cd apps/email-service && node src/server.js
+   ```
+
+4. **View Captured Emails**:
+   Open **`http://localhost:8025`** in your browser. All invitation emails for candidates (e.g. `arjun@example.com`, `kavya@example.com`, `neha@example.com`) are captured with full HTML styling, single-use tokens, and Start Assessment buttons.
+
+5. **External SMTP Mode**:
+   To send real emails across the internet, set `MAIL_MODE=smtp` with your provider's credentials:
+   ```env
+   MAIL_MODE=smtp
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASS=your-app-password
+   ```
+
 ## Demo logins (synthetic data)
 
 All passwords: `eduproctor-dev`
