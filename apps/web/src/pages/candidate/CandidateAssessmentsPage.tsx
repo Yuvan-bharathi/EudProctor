@@ -33,6 +33,8 @@ interface MyAssessmentBackend {
   session_status: string | null;
   course_name?: string | null;
   questions_count?: number;
+  /** when it was scheduled for this candidate (latest invitation sent, else enrolment) */
+  scheduled_at?: string | null;
 }
 
 interface AssessmentItem {
@@ -44,6 +46,8 @@ interface AssessmentItem {
   status: "scheduled" | "completed";
   isExpired: boolean;
   rawTime: number;
+  /** ms timestamp of when it was scheduled for the candidate; drives the newest-first order */
+  scheduledTime?: number;
   scheduledDate?: string;
   submittedDate?: string;
   score?: number;
@@ -131,6 +135,8 @@ export function CandidateAssessmentsPage() {
           const t = new Date(a.window_start).getTime();
           if (!isNaN(t)) rawTime = t;
         }
+        const scheduledParsed = a.scheduled_at ? new Date(a.scheduled_at).getTime() : NaN;
+        const scheduledTime = isNaN(scheduledParsed) ? rawTime : scheduledParsed;
 
         if (!isCompleted) {
           if (a.window_end) {
@@ -159,6 +165,7 @@ export function CandidateAssessmentsPage() {
             status: "completed" as const,
             isExpired: false,
             rawTime,
+            scheduledTime,
             resultUrl: `/candidate/results?session=${a.session_id || ""}`,
             feedback: "Mentor approved your evaluation summary. Strong in Frontend & APIs.",
           };
@@ -174,6 +181,7 @@ export function CandidateAssessmentsPage() {
           status: "scheduled" as const,
           isExpired,
           rawTime,
+          scheduledTime,
           instructionsUrl: `/candidate/instructions?examId=${a.exam_id}`,
           requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
         };
@@ -231,17 +239,11 @@ export function CandidateAssessmentsPage() {
         });
     }
 
-    // Sort: active (non-expired) assessments first, then the newest scheduled start first.
-    // The sort is stable, so ties keep the server order (most recently assigned first).
-    return [...rawItems].sort((a, b) => {
-      const aActive = !a.isExpired && a.status === "scheduled";
-      const bActive = !b.isExpired && b.status === "scheduled";
-
-      if (aActive && !bActive) return -1;
-      if (!aActive && bActive) return 1;
-
-      return b.rawTime - a.rawTime;
-    });
+    // Sort: most recently scheduled for this candidate first (latest invitation, else enrolment),
+    // then the latest start. Expired items keep their place; the "Active & Upcoming" tab hides them.
+    return [...rawItems].sort(
+      (a, b) => (b.scheduledTime ?? b.rawTime) - (a.scheduledTime ?? a.rawTime) || b.rawTime - a.rawTime,
+    );
   }, [remoteAssessments, isLoading, loadFailed, isDemoUser]);
 
   const filtered = assessments.filter((a) => {
