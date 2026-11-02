@@ -110,6 +110,11 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     tasks = []
     if settings.environment != "test":
+        if any(h in settings.web_base_url for h in ("localhost", "127.0.0.1")):
+            log.warning(
+                "WEB_BASE_URL is %s: links in emails (invitations, login, password reset) will only work on this "
+                "machine. On a deployment, set WEB_BASE_URL to the public web app URL.", settings.web_base_url,
+            )
         # Add new nullable columns on create_all-managed DBs (TiDB) and backfill Assessment IDs.
         try:
             from app.core.schema_sync import run as sync_schema

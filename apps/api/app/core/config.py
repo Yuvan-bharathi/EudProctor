@@ -19,8 +19,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://eduproctor:eduproctor@localhost:5432/eduproctor"
     redis_url: str = "redis://localhost:6379/0"
     chroma_url: str = "http://localhost:8001"
+    # Public URL of the web app. Every link in emails (invitations, login, password reset) is built from it,
+    # so deployments MUST set WEB_BASE_URL (e.g. https://eud-proctor.vercel.app).
     web_base_url: str = "http://localhost:5173"
     cors_origins: list[str] | str = ["http://localhost:5173"]
+
+    @field_validator("web_base_url", mode="after")
+    @classmethod
+    def strip_trailing_slash(cls, v: str) -> str:
+        # "https://app.example.com/" would otherwise produce ".../ /join/..." double slashes in email links
+        return v.strip().rstrip("/")
 
     @field_validator("cors_origins", mode="after")
     @classmethod
@@ -76,6 +84,9 @@ class Settings(BaseSettings):
     email_test_recipient: str = ""
     email_from_address: str = ""
     email_provider: str = "smtp"
+    # MAIL_BACKEND=brevo: send over HTTPS with Brevo's API (for hosts that block SMTP ports, e.g. Render free).
+    brevo_api_key: str = ""
+    mail_from_name: str = "EduProctor Intelligence"
 
     evidence_encryption_key: str = ""
     storage_dir: str = "storage"

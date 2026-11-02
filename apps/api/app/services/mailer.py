@@ -71,6 +71,55 @@ def _write_file(msg: EmailMessage) -> str:
     return str(file_path)
 
 
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+def _send_brevo(
+    to: str, original_to: str, subject: str, body: str, html_body: str | None,
+    candidate_name: str | None, is_test: bool,
+) -> dict[str, Any]:
+    """Send via Brevo's transactional email API (POST /v3/smtp/email, `api-key` header)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    s = get_settings()
+    base = {"recipient": to, "original_recipient": original_to, "is_test": is_test, "provider": "brevo-api"}
+    if not s.brevo_api_key:
+        return {**base, "delivered": False, "status": "Failed",
+                "error": "MAIL_BACKEND=brevo but BREVO_API_KEY is not set."}
+    sender_email = s.email_from_address or s.mail_from
+    payload: dict[str, Any] = {
+        "sender": {"name": s.mail_from_name, "email": sender_email},
+        "to": [{"email": to, **({"name": candidate_name} if candidate_name and to == original_to else {})}],
+        "subject": subject,
+    }
+    # Brevo takes one body type per request: HTML when we have it, otherwise plain text.
+    if html_body:
+        payload["htmlContent"] = html_body
+    else:
+        payload["textContent"] = body
+    req = urllib.request.Request(
+        BREVO_URL,
+        data=_json.dumps(payload).encode(),
+        headers={"api-key": s.brevo_api_key, "accept": "application/json", "content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = _json.loads(resp.read() or b"{}")
+        return {**base, "delivered": True, "status": "Sent", "error": None,
+                "message_id": data.get("messageId")}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:300]
+        log.warning("Brevo rejected email to %s: %s %s", to, exc.code, detail)
+        return {**base, "delivered": False, "status": "Failed",
+                "error": f"Brevo API error {exc.code}: {detail}"}
+    except Exception as exc:  # network problems etc.
+        log.warning("Brevo delivery to %s failed: %s", to, exc)
+        return {**base, "delivered": False, "status": "Failed", "error": f"Brevo API request failed: {exc}"}
+
+
 def send_mail(
     to: str,
     subject: str,
@@ -120,9 +169,14 @@ def send_mail(
             "error": None,
         }
 
+    # 2. Brevo HTTPS API backend. Use it where outbound SMTP ports are blocked (e.g. Render's free plan
+    #    blocks 25/465/587 since Sept 2025): it sends over HTTPS (port 443) instead.
+    if s.mail_backend == "brevo":
+        return _send_brevo(actual_to, original_to, subject, body, html_body, candidate_name, is_test)
+
     msg = _build_message(actual_to, subject, body, html_body=html_body, original_to=original_to)
 
-    # 2. File Backend — the message is only written to disk, nobody receives it.
+    # 3. File Backend — the message is only written to disk, nobody receives it.
     # Reported as NOT delivered so the mentor dashboard never shows a false "Sent".
     if s.mail_backend == "file":
         out_path = _write_file(msg)
@@ -136,7 +190,7 @@ def send_mail(
             "error": "MAIL_BACKEND=file: email saved to the local outbox only, not sent. Configure SMTP to deliver.",
         }
 
-    # 3. SMTP Backend
+    # 4. SMTP Backend
     try:
         smtp_cls = smtplib.SMTP_SSL if s.smtp_use_ssl else smtplib.SMTP
         with smtp_cls(s.smtp_host, s.smtp_port, timeout=15) as smtp:
