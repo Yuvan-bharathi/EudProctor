@@ -130,14 +130,112 @@ def send_mail(
             "recipient": actual_to,
             "original_recipient": original_to,
             "is_test": is_test,
-            "status": "Delivered",
+            "status": "Saved to Outbox",
             "provider": f"file ({out_path})",
             "error": None,
         }
 
-    # 3. SMTP Backend (with automatic file outbox fallback on connection drop)
+    # 3. Resend HTTP API Backend (direct delivery across internet without SMTP port blocking)
+    resend_key = s.resend_api_key.strip()
+    if resend_key or s.email_provider == "resend" or s.mail_backend == "resend":
+        if resend_key:
+            import json
+            import urllib.request
+            try:
+                from_addr = s.email_from_address or s.mail_from
+                # Resend requires onboarding sender if not domain verified
+                if "example.com" in from_addr:
+                    from_addr = "EduProctor <onboarding@resend.dev>"
+
+                payload = {
+                    "from": from_addr,
+                    "to": [actual_to],
+                    "subject": subject,
+                    "text": body,
+                    "html": html_body or body,
+                }
+                req = urllib.request.Request(
+                    "https://api.resend.com/emails",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {resend_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    return {
+                        "delivered": True,
+                        "recipient": actual_to,
+                        "original_recipient": original_to,
+                        "is_test": is_test,
+                        "status": "Delivered",
+                        "provider": f"resend ({resp_data.get('id', 'ok')})",
+                        "error": None,
+                    }
+            except Exception as resend_err:
+                log.error("Resend API delivery failed: %s", resend_err)
+                out_path = _write_file(msg)
+                return {
+                    "delivered": False,
+                    "recipient": actual_to,
+                    "original_recipient": original_to,
+                    "is_test": is_test,
+                    "status": "Failed",
+                    "provider": "resend",
+                    "error": f"Resend API error: {resend_err}. Email saved to {out_path}",
+                }
+
+    # 4. Node.js Nodemailer Microservice Backend
+    node_email_url = getattr(s, "email_service_url", "http://127.0.0.1:5050").strip()
+    if node_email_url:
+        import json
+        import re
+        import urllib.request
+        try:
+            m = re.search(r"https?://[^\s<>\"']+/join/[A-Za-z0-9_-]+", (body or "") + " " + (html_body or ""))
+            join_url = m.group(0) if m else f"{s.web_base_url}/candidate"
+            clean_title = re.sub(r"^(\[TEST INVITATION.*?\]\s*|Your Assessment Invitation:\s*)+", "", subject).strip(" :]") or "Java Script"
+            payload = {
+                "to": actual_to,
+                "candidateName": candidate_name or actual_to.split("@")[0].title(),
+                "assessmentTitle": clean_title,
+                "domain": "Technical Assessment",
+                "durationMin": 60,
+                "deadline": "Until Assessment Window Closes",
+                "joinUrl": join_url,
+                "instructions": body,
+            }
+            req = urllib.request.Request(
+                f"{node_email_url}/send-invitation",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                return {
+                    "delivered": True,
+                    "recipient": actual_to,
+                    "original_recipient": original_to,
+                    "is_test": is_test,
+                    "status": resp_data.get("status", "Delivered"),
+                    "provider": f"nodemailer ({resp_data.get('messageId', 'ok')})",
+                    "smtp_response": resp_data.get("smtpResponse"),
+                    "delivered_at": resp_data.get("deliveredAt"),
+                    "error": None,
+                }
+        except Exception as node_err:
+            log.warning("Node.js Nodemailer service (%s) bypassed: %s", node_email_url, node_err)
+
+    # 5. SMTP Backend (with TLS/auth support and explicit failure reporting)
     try:
         with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=5) as smtp:
+            if s.smtp_tls or s.smtp_port in (587, 2587):
+                smtp.starttls()
+            if s.smtp_user and s.smtp_password:
+                smtp.login(s.smtp_user, s.smtp_password)
             smtp.send_message(msg)
         return {
             "delivered": True,
@@ -153,13 +251,14 @@ def send_mail(
         try:
             out_path = _write_file(msg)
             return {
-                "delivered": True,
+                "delivered": False,
                 "recipient": actual_to,
                 "original_recipient": original_to,
                 "is_test": is_test,
-                "status": "Sent",
-                "provider": f"file_fallback ({out_path})",
-                "error": None,
+                "status": "Failed",
+                "provider": f"smtp://{s.smtp_host}:{s.smtp_port} (unreachable)",
+                "error": f"SMTP offline at {s.smtp_host}:{s.smtp_port}. Email saved locally to {out_path}. Configure SMTP or RESEND_API_KEY in .env for live internet delivery.",
+                "file_outbox": out_path,
             }
         except Exception as file_exc:
             log.error("Failed to write to file outbox: %s", file_exc)

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -84,11 +85,11 @@ def set_exam_questions(db: Session, exam: Exam, question_ids: list[uuid.UUID]) -
 
 def _assignment_out(a: ExamAssignment, c: User) -> AssignmentOut:
     meta = a.accommodations or {}
-    now = utcnow()
+    now = datetime.now(timezone.utc)
 
     expires_at = a.link_expires_at
     if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
 
     if a.link_used_at is not None:
         status_val = "Accepted"

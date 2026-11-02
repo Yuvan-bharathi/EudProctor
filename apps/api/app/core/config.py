@@ -34,14 +34,19 @@ class Settings(BaseSettings):
 
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_tls: bool = False
     mail_from: str = "no-reply@eduproctor.example.com"
-    mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory
+    mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory / resend
+    resend_api_key: str = ""
 
     # Email Delivery & YOPmail Test Mode
     email_test_mode: bool = False
     email_test_recipient: str = ""
     email_from_address: str = ""
-    email_provider: str = "smtp"
+    email_provider: str = "smtp"  # smtp / resend / file / nodemailer
+    email_service_url: str = "http://127.0.0.1:5050"
 
     evidence_encryption_key: str = ""
     storage_dir: str = "storage"

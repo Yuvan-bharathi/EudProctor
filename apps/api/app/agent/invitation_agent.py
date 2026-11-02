@@ -189,11 +189,11 @@ def assessment_published_trigger(state: InvitationAgentState) -> dict[str, Any]:
     if not exam:
         return {"error": "Assessment not found", "total_enrolled": 0, "status_summary": "Aborted: Assessment not found"}
 
-    if exam.status not in (ExamStatus.scheduled, ExamStatus.active):
+    if exam.status == ExamStatus.closed:
         return {
-            "error": f"Assessment is not published (current status: {exam.status.value})",
+            "error": "Assessment is closed",
             "total_enrolled": 0,
-            "status_summary": "Skipped: Assessment not published",
+            "status_summary": "Skipped: Assessment is closed",
         }
 
     if not exam.questions:
@@ -308,8 +308,8 @@ def check_existing_invitations(state: InvitationAgentState) -> dict[str, Any]:
         if not assignment:
             continue
 
-        # If already used/accepted, never send again
-        if assignment.link_used_at is not None:
+        # If already used/accepted and not forcing a fresh resend, skip
+        if not force_resend and assignment.link_used_at is not None:
             c["status"] = "Accepted"
             c["skip_reason"] = "Already accepted assessment invitation"
             continue
@@ -346,8 +346,15 @@ def create_invitation_records(state: InvitationAgentState) -> dict[str, Any]:
     eligible = state.get("eligible_candidates") or []
     now = utcnow()
     window_end = exam.window_end
-    if window_end.tzinfo is None:
+    if window_end is not None and getattr(window_end, "tzinfo", None) is None:
         window_end = window_end.replace(tzinfo=UTC)
+
+    # If the exam window has already expired in the past, automatically extend it to 7 days from now
+    # so that newly dispatched invitations and candidate sessions are active and takeable.
+    if window_end and window_end <= now:
+        window_end = now + timedelta(days=7)
+        exam.window_end = window_end
+        db.add(exam)
 
     for c in eligible:
         raw_token = secrets.token_urlsafe(32)
@@ -357,7 +364,10 @@ def create_invitation_records(state: InvitationAgentState) -> dict[str, Any]:
             continue
 
         assignment.link_token_hash = token_hash(raw_token)
-        assignment.link_expires_at = min(window_end, now + timedelta(hours=s.link_ttl_hours))
+        if window_end:
+            assignment.link_expires_at = min(window_end, now + timedelta(hours=s.link_ttl_hours))
+        else:
+            assignment.link_expires_at = now + timedelta(hours=s.link_ttl_hours)
         assignment.link_sent_at = now
         assignment.link_used_at = None
 
@@ -370,6 +380,7 @@ def create_invitation_records(state: InvitationAgentState) -> dict[str, Any]:
         meta = dict(assignment.accommodations or {})
         meta["invitation_status"] = "Sending"
         meta["invitation_sent_at"] = now.isoformat()
+        meta["latest_join_url"] = join_url
         assignment.accommodations = meta
 
     db.commit()

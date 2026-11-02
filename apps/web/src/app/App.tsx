@@ -112,14 +112,7 @@ export function App() {
       </Route>
 
       {/* Candidate Direct Flows */}
-      <Route
-        path="/join/:token"
-        element={
-          <RequireRole roles={["candidate"]}>
-            <JoinPage />
-          </RequireRole>
-        }
-      />
+      <Route path="/join/:token" element={<JoinPage />} />
       <Route
         path="/candidate/instructions"
         element={

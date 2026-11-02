@@ -223,6 +223,9 @@ class JoinOut(BaseModel):
     exam_title: str
     duration_min: int
     session_id: uuid.UUID | None = None
+    access_token: str | None = None
+    refresh_token: str | None = None
+    user: dict[str, Any] | None = None
 
 
 class ImportedOptionIn(BaseModel):

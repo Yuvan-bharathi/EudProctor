@@ -38,6 +38,13 @@ def main() -> None:
     from app.seed import seed_if_empty
     seed_if_empty(demo=os.environ.get("DEV_DEMO", "1") == "1")
 
+    # Start embedded SMTP listener (1025) and Web Inbox (8025)
+    try:
+        from app.services.dev_mail_server import start_dev_mail_service
+        start_dev_mail_service(smtp_port=1025, web_port=8025)
+    except Exception as mail_err:
+        print(f"Warning: could not start dev mail service: {mail_err}")
+
     uvicorn.run(
         "app.main:app",
         host="127.0.0.1",

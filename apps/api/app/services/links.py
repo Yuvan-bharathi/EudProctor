@@ -35,6 +35,10 @@ def issue_link(db: Session, exam: Exam, assignment: ExamAssignment, candidate: U
     now = utcnow()
     assignment.link_token_hash = token_hash(token)
     window_end = _ensure_utc(exam.window_end)
+    if window_end <= now:
+        window_end = now + timedelta(days=7)
+        exam.window_end = window_end
+        db.add(exam)
     assignment.link_expires_at = min(window_end, now + timedelta(hours=s.link_ttl_hours))
     assignment.link_sent_at = now
     assignment.link_used_at = None
@@ -50,16 +54,23 @@ def issue_link(db: Session, exam: Exam, assignment: ExamAssignment, candidate: U
     return token
 
 
-def redeem_link(db: Session, token: str, user: User) -> ExamAssignment:
+def redeem_link(db: Session, token: str, user: User | None = None) -> tuple[ExamAssignment, User]:
     """Validate and consume a link. Locks the row so two tabs cannot both redeem it."""
     assignment = db.scalar(
         select(ExamAssignment).where(ExamAssignment.link_token_hash == token_hash(token)).with_for_update()
     )
     if assignment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "This link is not valid.")
-    if assignment.candidate_id != user.id:
+    candidate = db.get(User, assignment.candidate_id)
+    if candidate is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assigned candidate not found.")
+    if user is not None and getattr(user, "role", None) and getattr(user.role, "value", str(user.role)) == "candidate" and assignment.candidate_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This link belongs to another candidate.")
     if assignment.link_used_at is not None:
+        from app.models.session import ExamSession, SessionStatus
+        existing_sess = db.scalar(select(ExamSession).where(ExamSession.assignment_id == assignment.id))
+        if existing_sess and existing_sess.status not in (SessionStatus.submitted, SessionStatus.expired, SessionStatus.identity_blocked):
+            return assignment, candidate
         raise HTTPException(status.HTTP_410_GONE, "This link has already been used.")
     now = utcnow()
     expires_at = _ensure_utc(assignment.link_expires_at)
@@ -70,4 +81,4 @@ def redeem_link(db: Session, token: str, user: User) -> ExamAssignment:
     if window_start is not None and now < window_start:
         raise HTTPException(status.HTTP_409_CONFLICT, "This assessment has not opened yet.")
     assignment.link_used_at = now
-    return assignment
+    return assignment, candidate
