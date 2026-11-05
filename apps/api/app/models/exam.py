@@ -101,7 +101,14 @@ class Exam(Base):
     flag_threshold_s: Mapped[float]
     glance_min_s: Mapped[float]
     max_flags: Mapped[int]
+    # Passing mark (% of total marks) set by the mentor in assessment settings; None = not set (UI shows 50).
+    pass_pct: Mapped[int | None] = mapped_column(default=None)
     status: Mapped[ExamStatus] = mapped_column(str_enum(ExamStatus), default=ExamStatus.draft)
+    # Human-readable Assessment ID shown in the UI and emails, e.g. "ASM-7K3QX9".
+    code: Mapped[str | None] = mapped_column(String(20), unique=True, index=True, default=None)
+    # Shared sign-in password for every candidate enrolled in this assessment, Fernet-encrypted
+    # (it must be re-sent in invitation emails, so a one-way hash is not enough).
+    candidate_password_enc: Mapped[str | None] = mapped_column(String(255), default=None, info={"audit": False})
     created_at: Mapped[datetime] = created_at()
 
     questions: Mapped[list["ExamQuestion"]] = relationship(

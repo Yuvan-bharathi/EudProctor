@@ -80,3 +80,5 @@ class MyAssessment(BaseModel):
     session_status: SessionStatus | None
     course_name: str | None = None
     questions_count: int = 0
+    # When this assessment was scheduled for the candidate: latest invitation sent, else enrolment time.
+    scheduled_at: datetime | None = None

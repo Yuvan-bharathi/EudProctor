@@ -7,7 +7,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/app/layouts";
 import { AssessmentStatusBadge } from "@/components/AssessmentStatusBadge";
@@ -33,6 +33,8 @@ interface MyAssessmentBackend {
   session_status: string | null;
   course_name?: string | null;
   questions_count?: number;
+  /** when it was scheduled for this candidate (latest invitation sent, else enrolment) */
+  scheduled_at?: string | null;
 }
 
 interface AssessmentItem {
@@ -44,6 +46,8 @@ interface AssessmentItem {
   status: "scheduled" | "completed";
   isExpired: boolean;
   rawTime: number;
+  /** ms timestamp of when it was scheduled for the candidate; drives the newest-first order */
+  scheduledTime?: number;
   scheduledDate?: string;
   submittedDate?: string;
   score?: number;
@@ -80,6 +84,10 @@ function writeCache(userId: string, list: MyAssessmentBackend[]) {
 export function CandidateAssessmentsPage() {
   usePageTitle("My Assessments");
   const [filter, setFilter] = useState<AssessmentFilter>("all");
+  const location = useLocation();
+  const [welcomeExam, setWelcomeExam] = useState<string | null>(
+    () => (location.state as { welcomeExam?: string } | null)?.welcomeExam ?? null,
+  );
   const auth = authStore.get();
   const userId = auth?.user?.id ?? "anonymous";
   // browser-only demo accounts have no server data; real candidates never see the local demo list
@@ -127,6 +135,8 @@ export function CandidateAssessmentsPage() {
           const t = new Date(a.window_start).getTime();
           if (!isNaN(t)) rawTime = t;
         }
+        const scheduledParsed = a.scheduled_at ? new Date(a.scheduled_at).getTime() : NaN;
+        const scheduledTime = isNaN(scheduledParsed) ? rawTime : scheduledParsed;
 
         if (!isCompleted) {
           if (a.window_end) {
@@ -155,6 +165,7 @@ export function CandidateAssessmentsPage() {
             status: "completed" as const,
             isExpired: false,
             rawTime,
+            scheduledTime,
             resultUrl: `/candidate/results?session=${a.session_id || ""}`,
             feedback: "Mentor approved your evaluation summary. Strong in Frontend & APIs.",
           };
@@ -170,6 +181,7 @@ export function CandidateAssessmentsPage() {
           status: "scheduled" as const,
           isExpired,
           rawTime,
+          scheduledTime,
           instructionsUrl: `/candidate/instructions?examId=${a.exam_id}`,
           requirements: ["Webcam & Microphone Required", "Non-punitive capped monitoring", "IDE Scratchpad Enabled"],
         };
@@ -227,17 +239,11 @@ export function CandidateAssessmentsPage() {
         });
     }
 
-    // Sort: active (non-expired) assessments first, then the newest scheduled start first.
-    // The sort is stable, so ties keep the server order (most recently assigned first).
-    return [...rawItems].sort((a, b) => {
-      const aActive = !a.isExpired && a.status === "scheduled";
-      const bActive = !b.isExpired && b.status === "scheduled";
-
-      if (aActive && !bActive) return -1;
-      if (!aActive && bActive) return 1;
-
-      return b.rawTime - a.rawTime;
-    });
+    // Sort: most recently scheduled for this candidate first (latest invitation, else enrolment),
+    // then the latest start. Expired items keep their place; the "Active & Upcoming" tab hides them.
+    return [...rawItems].sort(
+      (a, b) => (b.scheduledTime ?? b.rawTime) - (a.scheduledTime ?? a.rawTime) || b.rawTime - a.rawTime,
+    );
   }, [remoteAssessments, isLoading, loadFailed, isDemoUser]);
 
   const filtered = assessments.filter((a) => {
@@ -255,6 +261,30 @@ export function CandidateAssessmentsPage() {
         <h2 className="text-xl font-bold tracking-tight text-text">My Assessments</h2>
         <p className="text-xs text-muted">Track your upcoming tests, instructions, and completed performance reviews.</p>
       </div>
+
+      {/* Shown once, right after accepting an emailed invitation */}
+      {welcomeExam && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-xl border border-success-500/30 bg-success-50 p-4 text-sm text-success-700"
+        >
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <p>
+              Invitation accepted — you are signed in. Find <strong>{welcomeExam}</strong> below and click{" "}
+              <strong>View instructions &amp; pre-checks</strong> when the assessment window opens. Next time, sign in
+              with your username and password.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setWelcomeExam(null)}
+            className="shrink-0 text-xs font-medium underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-border pb-3">

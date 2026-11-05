@@ -1,11 +1,11 @@
-import { GraduationCap, Shield, User } from "lucide-react";
+import { GraduationCap } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { ErrorState } from "@/components/States";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
-import { type AuthState, authStore, type Role, roleHome, useAuth } from "@/features/auth/store";
+import { type AuthState, authStore, roleHome, useAuth } from "@/features/auth/store";
 import { api, errorMessage } from "@/lib/api";
 
 export function LoginPage() {
@@ -36,40 +36,6 @@ export function LoginPage() {
     }
   }
 
-  const quickDemoLogin = async (r: Role) => {
-    const demoCreds: Record<Role, { email: string; pass: string }> = {
-      mentor: { email: "mentor1@example.com", pass: "eduproctor-dev" },
-      candidate: { email: "candidate01@example.com", pass: "eduproctor-dev" },
-      admin: { email: "admin@example.com", pass: "eduproctor-dev" },
-    };
-    const cred = demoCreds[r];
-    try {
-      const res = await api<AuthState>("/auth/login", { body: { email: cred.email, password: cred.pass }, auth: false });
-      authStore.set(res);
-      navigate(safeNext ?? roleHome[res.user.role]);
-      return;
-    } catch {
-      const mockUsers: Record<Role, { id: string; email: string; name: string }> = {
-        mentor: { id: "u-mentor", email: "mentor1@example.com", name: "Mentor Asha" },
-        candidate: { id: "u-candidate", email: "candidate01@example.com", name: "Bela Sato" },
-        admin: { id: "u-admin", email: "admin@example.com", name: "System Admin" },
-      };
-      const targetUser = mockUsers[r];
-      authStore.set({
-        access_token: `mock-${r}-token`,
-        refresh_token: `mock-${r}-refresh`,
-        user: {
-          id: targetUser.id,
-          email: targetUser.email,
-          name: targetUser.name,
-          role: r,
-          is_active: true,
-        },
-      });
-      navigate(safeNext ?? roleHome[r]);
-    }
-  };
-
   return (
     <main className="flex min-h-screen items-center justify-center bg-bg px-4 py-8">
       <Card className="w-full max-w-md p-6 sm:p-8 space-y-6 shadow-sm">
@@ -88,59 +54,31 @@ export function LoginPage() {
           </span>
         </div>
 
-        {/* 1-Click Quick Demo Sign In */}
-        <div className="rounded-xl border border-border bg-surface-muted/50 p-4 space-y-2.5">
-          <span className="text-xs font-semibold text-text">Quick Demo Access</span>
-          <div className="grid grid-cols-3 gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => quickDemoLogin("mentor")}
-              className="text-xs hover:border-primary-500 hover:text-primary-700"
-            >
-              <GraduationCap className="size-3.5 text-primary-600" />
-              <span>Mentor</span>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => quickDemoLogin("candidate")}
-              className="text-xs hover:border-primary-500 hover:text-primary-700"
-            >
-              <User className="size-3.5 text-info-700" />
-              <span>Candidate</span>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => quickDemoLogin("admin")}
-              className="text-xs hover:border-primary-500 hover:text-primary-700"
-            >
-              <Shield className="size-3.5 text-ai-700" />
-              <span>Admin</span>
-            </Button>
-          </div>
-          </div>
-
         {/* Standard Credentials Form */}
         <form onSubmit={submit} className="space-y-4" noValidate>
           <div>
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">Username or email</Label>
             <Input
               id="email"
-              type="email"
+              type="text"
+              autoCapitalize="none"
               autoComplete="username"
-              placeholder="e.g. mentor1@example.com"
+              placeholder="e.g. tanu.shree or mentor1@example.com"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
           <div>
-            <Label htmlFor="password">Password</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <Link
+                to="/forgot-password"
+                className="text-xs font-medium text-primary-700 underline-offset-2 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <Input
               id="password"
               type="password"
@@ -152,7 +90,11 @@ export function LoginPage() {
             />
           </div>
           {error && <ErrorState message={error} />}
-          <Button type="submit" className="w-full bg-primary-600 text-white hover:bg-primary-700" disabled={busy || !email || !password}>
+          <Button
+            type="submit"
+            className="w-full bg-primary-600 text-white hover:bg-primary-700 font-semibold"
+            disabled={busy || !email || !password}
+          >
             {busy ? "Signing in…" : "Sign in with password"}
           </Button>
         </form>

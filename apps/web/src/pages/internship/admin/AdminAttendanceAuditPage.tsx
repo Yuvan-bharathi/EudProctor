@@ -1,155 +1,115 @@
-import {
-  CalendarCheck2,
-  CheckCircle2,
-  FileSpreadsheet,
-} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, ClipboardList } from "lucide-react";
 import { useState } from "react";
 import { usePageTitle } from "@/app/layouts";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Label, Select } from "@/components/ui/input";
+import { type DayStatus, internshipApi } from "@/lib/internshipApi";
 import {
-  getPersistedAttendance,
-  mockInternshipMentees,
-} from "@/lib/mockData";
-import type { DailyAttendance } from "@/lib/types";
+  AttendanceMonthView,
+  DAY_STATUSES,
+  DAY_TONE,
+  DayGrid,
+  localDate,
+} from "@/pages/internship/mentor/ManagerAttendancePage";
 
 export function AdminAttendanceAuditPage() {
   usePageTitle("Attendance Audit Trail");
+  const [on, setOn] = useState(localDate());
+  const [status, setStatus] = useState<DayStatus | "all">("all");
+  const [month, setMonthFor] = useState<{ id: string; name: string } | null>(null);
 
-  const [attendance] = useState<DailyAttendance[]>(() => getPersistedAttendance());
-  const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const filtered = attendance.filter((a) => {
-    if (filterStatus !== "all" && a.status !== filterStatus) return false;
-    return true;
+  // Same query key as DayGrid, so this only reads the cached rows for the counts.
+  const dayQ = useQuery({
+    queryKey: ["internship", "attendance", "day", on],
+    queryFn: () => internshipApi.menteesAttendanceToday(on),
   });
-
-  const handleExportCSV = () => {
-    const headers = "ID,MenteeId,Date,CheckIn,CheckOut,TotalHours,Status\n";
-    const rows = filtered
-      .map(
-        (a) =>
-          `${a.id},${a.menteeId},${a.date},${a.checkInTime || ""},${a.checkOutTime || ""},${a.totalHours},${a.status}`,
-      )
-      .join("\n");
-    const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `internship_attendance_audit_${new Date().toISOString().split("T")[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast("Attendance audit log exported to CSV successfully.");
-  };
+  const counts = new Map<DayStatus, number>();
+  for (const r of dayQ.data ?? []) counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
+  const needsCorrection = counts.get("Needs Correction") ?? 0;
+  const viewMonth = (r: { mentee_id: string; name: string }) => setMonthFor({ id: r.mentee_id, name: r.name });
 
   return (
     <div className="space-y-6">
-      {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg animate-in fade-in slide-in-from-top-3">
-          <CheckCircle2 className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <Badge tone="primary">
+            <ClipboardList aria-hidden="true" />
+            Attendance audit
+          </Badge>
+          <h1 className="mt-1 text-xl font-bold tracking-tight text-text sm:text-2xl">Attendance Audit Trail</h1>
+          <p className="text-sm text-muted">
+            Punch-in/out sessions for every active intern. Admins can correct sessions; every correction needs a note and
+            is recorded.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <Label htmlFor="audit-date">Date</Label>
+            <Input id="audit-date" type="date" max={localDate()} value={on} onChange={(e) => e.target.value && setOn(e.target.value)} className="w-44" />
+          </div>
+          <div>
+            <Label htmlFor="audit-status">Status</Label>
+            <Select id="audit-status" value={status} onChange={(e) => setStatus(e.target.value as DayStatus | "all")}>
+              <option value="all">All statuses</option>
+              {DAY_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      {dayQ.data && dayQ.data.length > 0 && (
+        <div className="flex flex-wrap gap-2" aria-label="Status counts">
+          {DAY_STATUSES.filter((s) => counts.has(s)).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setStatus(status === s ? "all" : s)}
+              aria-pressed={status === s}
+              className="rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            >
+              <Badge tone={DAY_TONE[s]} className={status === s ? "ring-2 ring-primary-500" : undefined}>
+                {s}: {counts.get(s)}
+              </Badge>
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-            <CalendarCheck2 className="size-3.5" />
-            <span>Digital Audit Trail</span>
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 mt-1 sm:text-2xl">
-            Programme Attendance & Timesheet Audit
-          </h1>
-          <p className="text-xs text-slate-500">
-            Audit logs for all check-in/out timestamps across cohorts without biometric surveillance.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-2xs"
-          >
-            <option value="all">All Statuses</option>
-            <option value="Present">Present</option>
-            <option value="Late">Late</option>
-            <option value="Leave">Leave</option>
-          </select>
-
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer shadow-2xs"
-          >
-            <FileSpreadsheet className="size-3.5 text-emerald-600" />
-            <span>Export CSV Timesheet</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Attendance Table */}
-      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-2xs">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+      <Card>
+        <CardHeader>
           <div>
-            <h3 className="font-semibold text-slate-900 text-sm">Verified Timesheet Entries</h3>
-            <p className="text-xs text-slate-500">Showing {filtered.length} logged records</p>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-4 text-danger-600" aria-hidden="true" />
+              Needs correction on {on}
+              {dayQ.data && <Badge tone={needsCorrection > 0 ? "danger" : "success"}>{needsCorrection}</Badge>}
+            </CardTitle>
+            <CardDescription>
+              Usually a session that was never punched out and was auto-closed. Fix the punch-out time with a note.
+            </CardDescription>
           </div>
-          <span className="text-xs font-bold text-emerald-700">Audit Compliance: 100%</span>
-        </div>
+        </CardHeader>
+        <DayGrid on={on} statusFilter="Needs Correction" onViewMonth={viewMonth} />
+      </Card>
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-slate-100 text-[11px] font-semibold text-slate-500 uppercase">
-                <th className="pb-2.5">Date</th>
-                <th className="pb-2.5">Intern Name</th>
-                <th className="pb-2.5">Check-In</th>
-                <th className="pb-2.5">Check-Out</th>
-                <th className="pb-2.5">Logged Hours</th>
-                <th className="pb-2.5">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((rec) => {
-                const mentee = mockInternshipMentees.find((m) => m.id === rec.menteeId);
-                return (
-                  <tr key={rec.id} className="hover:bg-slate-50/50">
-                    <td className="py-3 font-semibold text-slate-900">{rec.date}</td>
-                    <td className="py-3 font-medium text-slate-800">
-                      {mentee?.name || rec.menteeId}
-                    </td>
-                    <td className="py-3 font-mono text-slate-700">{rec.checkInTime || "—"}</td>
-                    <td className="py-3 font-mono text-slate-700">{rec.checkOutTime || "—"}</td>
-                    <td className="py-3 font-mono font-semibold text-slate-900">
-                      {rec.totalHours > 0 ? `${rec.totalHours} hrs` : "Working"}
-                    </td>
-                    <td className="py-3">
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-bold ${
-                          rec.status === "Present"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : rec.status === "Late"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {rec.status}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>All interns on {on}</CardTitle>
+            <CardDescription>
+              {status === "all" ? "Every status; Needs Correction rows are listed first." : `Filtered to “${status}”.`}
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <DayGrid on={on} statusFilter={status} onViewMonth={viewMonth} />
+      </Card>
+
+      {month && <AttendanceMonthView key={month.id} menteeId={month.id} name={month.name} onClose={() => setMonthFor(null)} />}
     </div>
   );
 }

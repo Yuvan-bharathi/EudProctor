@@ -19,8 +19,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://eduproctor:eduproctor@localhost:5432/eduproctor"
     redis_url: str = "redis://localhost:6379/0"
     chroma_url: str = "http://localhost:8001"
+    # Public URL of the web app. Every link in emails (invitations, login, password reset) is built from it,
+    # so deployments MUST set WEB_BASE_URL (e.g. https://eud-proctor.vercel.app).
     web_base_url: str = "http://localhost:5173"
     cors_origins: list[str] | str = ["http://localhost:5173"]
+
+    @field_validator("web_base_url", mode="after")
+    @classmethod
+    def strip_trailing_slash(cls, v: str) -> str:
+        # "https://app.example.com/" would otherwise produce ".../ /join/..." double slashes in email links
+        return v.strip().rstrip("/")
 
     @field_validator("cors_origins", mode="after")
     @classmethod
@@ -47,6 +55,13 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     anthropic_model: str = ""
+    # Optional Anthropic-compatible gateway, e.g. https://openrouter.ai/api (OpenRouter's Messages API).
+    # When set, ANTHROPIC_API_KEY is sent as a Bearer token and ANTHROPIC_MODEL uses the gateway's ids
+    # (e.g. anthropic/claude-sonnet-5.5).
+    anthropic_base_url: str = ""
+    # Per-call output cap for the internship agents (includes adaptive thinking). Lower it if your
+    # gateway/credit limit rejects large requests (OpenRouter 402 "can only afford N tokens").
+    agent_max_tokens: int = 16000
     agent_llm: str = "anthropic"  # anthropic / mock (rule-based stand-in, dev and test only)
     # USD per million tokens, for the agent dashboard's cost estimate
     agent_price_in_per_mtok: float = 4.0
@@ -55,12 +70,22 @@ class Settings(BaseSettings):
 
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    # Credentials for a real relay (Gmail app password, SendGrid, SES, Brevo, ...).
+    # Leave blank for an unauthenticated local relay such as Mailpit.
+    smtp_username: str = ""
     smtp_user: str = ""
     smtp_password: str = ""
+    smtp_use_tls: bool = False  # STARTTLS (usually port 587)
     smtp_tls: bool = False
+    smtp_use_ssl: bool = False  # implicit TLS (usually port 465)
     mail_from: str = "no-reply@eduproctor.example.com"
-    mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory / resend
+    mail_backend: str = "smtp"  # smtp (falls back to file outbox if unreachable) / file / memory / resend / brevo
     resend_api_key: str = ""
+    # MAIL_BACKEND=brevo: send over HTTPS with Brevo's API (for hosts that block SMTP ports, e.g. Render free).
+    brevo_api_key: str = ""
+    mail_from_name: str = "EduProctor Intelligence"
 
     # Email Delivery & YOPmail Test Mode
     email_test_mode: bool = False
@@ -72,6 +97,19 @@ class Settings(BaseSettings):
     evidence_encryption_key: str = ""
     storage_dir: str = "storage"
     retention_days: int = 90
+
+    # ---- Internship flow (implementation plan, section 6.9 / 6.7) ----
+    internship_timezone: str = "Asia/Kolkata"  # default organisation time zone for new cohorts
+    full_day_hours: float = 8.0  # team decision: 8 hours of logged-in time = full day
+    half_day_hours: float = 4.0
+    stall_hours: float = 4.0  # in-progress task + punched in + no activity for this long -> mentor alert
+    max_submission_bytes: int = 200_000
+    max_submission_lines: int = 2000
+    weekly_quiz_questions: int = 5
+    min_questions_per_skill: int = 3  # skill level only classified after this many questions
+    langgraph_checkpointer: str = "sqlite"  # sqlite (dev, file under storage_dir) / memory (tests) / redis
+    internship_scheduler_interval_s: int = 900
+    max_mentees_per_mentor: int = 2  # matches the cohorts page ('strictly capped at 2')  # auto-close sessions, stall scan, weekly quiz & milestone drafts
 
     # proctoring policy (PRD section 4)
     glance_min_s: float = 1.0

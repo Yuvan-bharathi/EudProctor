@@ -14,6 +14,7 @@ import { CandidateResultsViewPage } from "@/pages/candidate/CandidateResultsView
 import { JoinPage } from "@/pages/candidate/JoinPage";
 import { SessionPage } from "@/pages/candidate/SessionPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { ForgotPasswordPage, ResetPasswordPage } from "@/pages/PasswordResetPages";
 import { NotificationsPage } from "@/pages/NotificationsPage";
 import { CandidateResultPage } from "@/pages/mentor/CandidateResultPage";
 import { ExamDetailPage } from "@/pages/mentor/ExamDetailPage";
@@ -48,6 +49,8 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/" element={<RoleRedirect />} />
 
       {/* Legacy prototype routes redirect */}
@@ -116,6 +119,8 @@ export function App() {
       </Route>
 
       {/* Candidate Direct Flows */}
+      {/* Public: the emailed invitation token is the credential. The page handles password
+          creation / sign-in and then sends the candidate to the portal. */}
       <Route path="/join/:token" element={<JoinPage />} />
       <Route
         path="/candidate/instructions"

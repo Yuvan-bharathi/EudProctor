@@ -1,683 +1,662 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
+  ArrowLeft,
   Award,
-  BookOpen,
   CheckCircle2,
-  Clock,
-  Eye,
   FileQuestion,
+  Lightbulb,
   Play,
-  Rocket,
-  ShieldCheck,
   Sparkles,
   Timer,
+  XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePageTitle } from "@/app/layouts";
-import { useAuth } from "@/features/auth/store";
-import { getWeeklyMCQQuestions } from "@/lib/candidateExamQuestions";
-import {
-  getInternshipMenteeForUser,
-  getPersistedWeeklyMCQs,
-  submitMenteeWeeklyMCQ,
-} from "@/lib/mockData";
-import type { Question, WeeklyMCQAssessment } from "@/lib/types";
+import { EmptyState, ErrorState, LoadingState } from "@/components/States";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { errorMessage } from "@/lib/api";
+import { internshipApi, type WeeklyQuiz } from "@/lib/internshipApi";
 
-export function MenteeWeeklyMCQPage() {
-  usePageTitle("Weekly MCQs & Knowledge Checks");
-  const { user } = useAuth();
-  const mentee = getInternshipMenteeForUser(user);
+type View = { mode: "list" } | { mode: "take"; id: string } | { mode: "results"; id: string; justSubmitted?: boolean };
 
-  const [mcqs, setMcqs] = useState<WeeklyMCQAssessment[]>(() => getPersistedWeeklyMCQs());
-  const [selectedMonth, setSelectedMonth] = useState<"all" | 1 | 2 | 3>("all");
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+const quizKey = (id: string) => ["internship", "quiz", id] as const;
 
-  // Active taking exam modal state
-  const [activeTakingMcq, setActiveTakingMcq] = useState<WeeklyMCQAssessment | null>(null);
-  const [currentQIndex, setCurrentQIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
-  const [examSecondsLeft, setExamSecondsLeft] = useState(1200); // 20 mins default
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submissionSuccessMcq, setSubmissionSuccessMcq] = useState<WeeklyMCQAssessment | null>(null);
+function formatTimer(totalSeconds: number) {
+  const s = Math.max(0, totalSeconds);
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+}
 
-  // Scorecard modal state
-  const [inspectedMcq, setInspectedMcq] = useState<WeeklyMCQAssessment | null>(null);
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
 
-  // Sync persistence across tabs
-  useEffect(() => {
-    const handleUpdate = () => setMcqs(getPersistedWeeklyMCQs());
-    window.addEventListener("eduproctor_weekly_mcqs_updated", handleUpdate);
-    return () => window.removeEventListener("eduproctor_weekly_mcqs_updated", handleUpdate);
-  }, []);
+// ------------------------------------------------------------------ list
 
-  // Filtered MCQs
-  const filteredMcqs = useMemo(() => {
-    return mcqs.filter((m) => {
-      if (selectedMonth !== "all" && m.monthNumber !== selectedMonth) return false;
-      return true;
-    });
-  }, [mcqs, selectedMonth]);
+function QuizCard({ quiz, onOpen }: { quiz: WeeklyQuiz; onOpen: () => void }) {
+  const isSubmitted = quiz.status === "submitted";
+  return (
+    <Card className="flex flex-col justify-between">
+      <div>
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <Badge tone="neutral">
+            Month {quiz.month_number} · Week {quiz.week_number}
+          </Badge>
+          {isSubmitted ? (
+            <Badge tone="success">
+              <CheckCircle2 className="size-3.5" aria-hidden="true" />
+              Submitted{quiz.score_pct != null && ` · ${quiz.score_pct}%`}
+            </Badge>
+          ) : (
+            <Badge tone="info">
+              <Sparkles className="size-3.5" aria-hidden="true" />
+              Ready to start
+            </Badge>
+          )}
+        </div>
+        <h3 className="mt-3 text-sm font-semibold leading-snug text-text">{quiz.title}</h3>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
+          <span className="flex items-center gap-1">
+            <FileQuestion className="size-3.5" aria-hidden="true" />
+            {quiz.question_count} questions
+          </span>
+          <span className="flex items-center gap-1">
+            <Timer className="size-3.5" aria-hidden="true" />
+            {quiz.duration_min} min
+          </span>
+        </div>
+        {isSubmitted && quiz.submitted_at && (
+          <p className="mt-2 text-xs text-muted">Submitted {formatDate(quiz.submitted_at)}</p>
+        )}
+      </div>
+      <div className="mt-4 border-t border-border pt-3">
+        {isSubmitted ? (
+          <Button variant="secondary" className="w-full" onClick={onOpen}>
+            <Award aria-hidden="true" />
+            View results
+          </Button>
+        ) : (
+          <Button className="w-full" onClick={onOpen}>
+            <Play aria-hidden="true" />
+            Start weekly check
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
 
-  // Derived metrics
-  const completedCount = mcqs.filter((m) => m.status === "published" || m.status === "submitted").length;
-  const publishedList = mcqs.filter((m) => m.status === "published" && m.scorePct !== undefined);
-  const avgScore =
-    publishedList.length > 0
-      ? Math.round(publishedList.reduce((acc, curr) => acc + (curr.scorePct || 0), 0) / publishedList.length)
-      : 93;
+function QuizList({ onOpen }: { onOpen: (q: WeeklyQuiz) => void }) {
+  const quizzesQ = useQuery({ queryKey: ["internship", "quizzes"], queryFn: () => internshipApi.quizzes() });
+  const [month, setMonth] = useState<number | "all">("all");
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
-  };
+  if (quizzesQ.isPending) return <LoadingState rows={4} label="Loading weekly checks" />;
+  if (quizzesQ.isError)
+    return <ErrorState message={errorMessage(quizzesQ.error)} onRetry={() => quizzesQ.refetch()} />;
 
-  // Exam timer countdown
-  useEffect(() => {
-    if (!activeTakingMcq) return;
-    const interval = setInterval(() => {
-      setExamSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [activeTakingMcq]);
+  const quizzes = quizzesQ.data;
+  if (quizzes.length === 0)
+    return (
+      <EmptyState message="No weekly check yet. Your weekly check appears here after your mentor approves it — usually on Fridays." />
+    );
 
-  const questions: Question[] = useMemo(() => {
-    if (!activeTakingMcq) return [];
-    return getWeeklyMCQQuestions(activeTakingMcq.weekNumber);
-  }, [activeTakingMcq]);
-
-  const currentQ = questions[currentQIndex] || questions[0];
-
-  const handleStartExam = (mcq: WeeklyMCQAssessment) => {
-    setActiveTakingMcq(mcq);
-    setCurrentQIndex(0);
-    setAnswers({});
-    setExamSecondsLeft(mcq.durationMinutes * 60);
-  };
-
-  const handleSelectOption = (key: string) => {
-    setAnswers((prev) => ({
-      ...prev,
-      [currentQIndex + 1]: key,
-    }));
-  };
-
-  const handleFinishExam = () => {
-    if (!activeTakingMcq) return;
-    setIsSubmitting(true);
-    const answeredCount = Object.keys(answers).length;
-    const totalQ = questions.length || activeTakingMcq.questionCount;
-
-    setTimeout(() => {
-      const updated = submitMenteeWeeklyMCQ(
-        activeTakingMcq.id,
-        answeredCount,
-        totalQ,
-        mentee.name,
-      );
-      setIsSubmitting(false);
-      setActiveTakingMcq(null);
-      setSubmissionSuccessMcq(updated);
-      showToast(`Submitted! AI Evaluation Agent drafted report for Manager ${activeTakingMcq.managerName}.`);
-    }, 1000);
-  };
-
-  const formatTimer = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
-  };
+  const available = quizzes.filter((q) => q.status === "available");
+  const submitted = quizzes.filter((q) => q.status === "submitted");
+  const latestSubmitted = submitted.reduce<WeeklyQuiz | null>(
+    (acc, q) => (!acc || q.week_number > acc.week_number ? q : acc),
+    null,
+  );
+  const months = Array.from(new Set(quizzes.map((q) => q.month_number))).sort((a, b) => a - b);
+  const shown = month === "all" ? quizzes : quizzes.filter((q) => q.month_number === month);
 
   return (
     <div className="space-y-6">
-      {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg animate-in fade-in slide-in-from-top-3">
-          <CheckCircle2 className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <span className="text-xs font-medium text-muted">Ready to take</span>
+          <p className="mt-1 text-xl font-bold text-text">{available.length}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <span className="text-xs font-medium text-muted">Completed</span>
+          <p className="mt-1 text-xl font-bold text-text">{submitted.length}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <span className="text-xs font-medium text-muted">Latest score</span>
+          <p className="mt-1 text-xl font-bold text-text">
+            {latestSubmitted?.score_pct != null ? `${latestSubmitted.score_pct}%` : "—"}
+          </p>
+          {latestSubmitted && <span className="text-xs text-muted">Week {latestSubmitted.week_number}</span>}
+        </div>
+      </div>
+
+      {months.length > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+          <div className="flex items-center gap-1 rounded-xl bg-surface-muted p-1" role="tablist" aria-label="Month">
+            {(["all", ...months] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="tab"
+                aria-selected={month === m}
+                onClick={() => setMonth(m)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 ${
+                  month === m ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text"
+                }`}
+              >
+                {m === "all" ? "All weeks" : `Month ${m}`}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-muted">
+            Showing <strong>{shown.length}</strong> weekly checks
+          </span>
         </div>
       )}
 
-      {/* Hero Header */}
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-r from-emerald-50 via-teal-50/40 to-slate-50 p-6 shadow-xs">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-              <Rocket className="size-3 text-emerald-600" />
-              <span>Full Stack 12-Week Roadmap · Continuous Knowledge Evaluation</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-              Weekly Knowledge Checks & MCQs
-            </h1>
-            <p className="max-w-2xl text-xs text-slate-600 sm:text-sm">
-              Proctored weekly assessments testing your command of sprint topics. Submissions are analyzed by the{" "}
-              <strong className="text-emerald-700">AI Assessment Evaluation Agent</strong> and signed off by your Manager.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3.5 py-2 shadow-2xs">
-              <ShieldCheck className="size-5 text-emerald-600" />
-              <div className="text-left text-xs">
-                <span className="block font-bold text-slate-900">Calm AI Proctoring</span>
-                <span className="text-[10px] text-slate-500">Look-away & tab check (Max 3 flags)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 4 Stats Cards */}
-        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-xl border border-emerald-100 bg-white/90 p-3 shadow-2xs">
-            <span className="text-[11px] font-medium text-slate-500">Weekly Checks Done</span>
-            <p className="mt-1 text-xl font-bold text-slate-900">
-              {completedCount} <span className="text-xs font-normal text-slate-400">/ 12 Weeks</span>
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-emerald-100 bg-white/90 p-3 shadow-2xs">
-            <span className="text-[11px] font-medium text-slate-500">Average MCQ Score</span>
-            <p className="mt-1 text-xl font-bold text-emerald-700">{avgScore}%</p>
-          </div>
-
-          <div className="rounded-xl border border-emerald-100 bg-white/90 p-3 shadow-2xs">
-            <span className="text-[11px] font-medium text-slate-500">Active Sprint Topic</span>
-            <p className="mt-1 text-sm font-bold text-slate-900 truncate">React Core & Hooks</p>
-          </div>
-
-          <div className="rounded-xl border border-emerald-100 bg-white/90 p-3 shadow-2xs">
-            <span className="text-[11px] font-medium text-slate-500">Assigned Manager</span>
-            <p className="mt-1 text-sm font-bold text-slate-900 truncate">Priya Sharma</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Filter Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-        <div className="flex items-center gap-1.5 rounded-xl bg-slate-100 p-1">
-          <button
-            type="button"
-            onClick={() => setSelectedMonth("all")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-              selectedMonth === "all" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            All 12 Weeks
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMonth(1)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-              selectedMonth === 1 ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            Month 1 (Foundations)
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMonth(2)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-              selectedMonth === 2 ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            Month 2 (Applied Skills)
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMonth(3)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-              selectedMonth === 3 ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            Month 3 (Capstone & BI)
-          </button>
-        </div>
-
-        <span className="text-xs text-slate-500">
-          Showing <strong>{filteredMcqs.length}</strong> weekly assessments
-        </span>
-      </div>
-
-      {/* MCQs Grid */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {filteredMcqs.map((mcq) => {
-          const isPublished = mcq.status === "published";
-          const isSubmitted = mcq.status === "submitted";
-          const isAvailable = mcq.status === "available";
+        {shown.map((q) => (
+          <QuizCard key={q.id} quiz={q} onOpen={() => onOpen(q)} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
-          return (
-            <div
-              key={mcq.id}
-              className={`flex flex-col justify-between rounded-xl border bg-white p-5 shadow-2xs transition-all ${
-                isPublished
-                  ? "border-emerald-200/90 hover:border-emerald-400"
-                  : isSubmitted
-                    ? "border-amber-200/90 hover:border-amber-400 bg-amber-50/10"
-                    : "border-slate-200/90 hover:border-slate-300"
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-bold text-emerald-800">
-                    Month {mcq.monthNumber} · Week {mcq.weekInMonth} (W{mcq.weekNumber})
-                  </span>
+// ------------------------------------------------------------------ taking
 
-                  {isPublished && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                      <CheckCircle2 className="size-3" />
-                      Score: {mcq.scorePct}%
-                    </span>
-                  )}
+function TakeQuiz({ id, onExit, onSubmitted }: { id: string; onExit: () => void; onSubmitted: (q: WeeklyQuiz) => void }) {
+  const qc = useQueryClient();
+  const quizQ = useQuery({ queryKey: quizKey(id), queryFn: () => internshipApi.quiz(id) });
+  const [index, setIndex] = useState(0);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [deadline, setDeadline] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [confirming, setConfirming] = useState<"submit" | "exit" | null>(null);
+  const autoSubmitted = useRef(false);
 
-                  {isSubmitted && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                      <Clock className="size-3" />
-                      Awaiting Manager Sign-off
-                    </span>
-                  )}
+  const quiz = quizQ.data;
+  const questions = useMemo(() => quiz?.questions ?? [], [quiz]);
 
-                  {isAvailable && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
-                      <Sparkles className="size-3" />
-                      Ready to Start
-                    </span>
-                  )}
-                </div>
+  const submit = useMutation({
+    mutationFn: (a: Record<string, string>) => internshipApi.submitQuiz(id, a),
+    onSuccess: (data) => {
+      qc.setQueryData(quizKey(id), data);
+      void qc.invalidateQueries({ queryKey: ["internship", "quizzes"] });
+      void qc.invalidateQueries({ queryKey: ["internship", "skills"] });
+      onSubmitted(data);
+    },
+  });
 
-                <h3 className="mt-2.5 text-sm font-bold text-slate-900 leading-snug">{mcq.title}</h3>
-                <p className="mt-1 text-xs text-slate-500 font-medium">{mcq.theme}</p>
+  // Start the countdown once the questions have loaded.
+  useEffect(() => {
+    if (quiz && quiz.status === "available" && deadline === null) {
+      setDeadline(Date.now() + quiz.duration_min * 60_000);
+    }
+  }, [quiz, deadline]);
 
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                  <span className="rounded bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
-                    {mcq.skillArea}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <FileQuestion className="size-3 text-slate-400" />
-                    {mcq.questionCount} Questions
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Timer className="size-3 text-slate-400" />
-                    {mcq.durationMinutes} Mins
-                  </span>
-                </div>
+  useEffect(() => {
+    if (deadline === null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [deadline]);
 
-                {/* Agent Analysis Snippet if available */}
-                {mcq.agentAnalysis && (
-                  <div className="mt-3.5 rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs">
-                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                      <span className="flex items-center gap-1 text-emerald-700">
-                        <Sparkles className="size-3" />
-                        AI Agent Evaluation
-                      </span>
-                      <span>Accuracy: {mcq.agentAnalysis.accuracyPct}%</span>
-                    </div>
-                    <p className="mt-1 text-[11px] text-slate-600 line-clamp-2">
-                      {mcq.agentAnalysis.summary}
-                    </p>
-                  </div>
-                )}
-              </div>
+  const secondsLeft = deadline === null ? null : Math.max(0, Math.ceil((deadline - now) / 1000));
 
-              {/* Action Buttons */}
-              <div className="mt-4 border-t border-slate-100 pt-3">
-                {isPublished && (
-                  <button
-                    type="button"
-                    onClick={() => setInspectedMcq(mcq)}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-                  >
-                    <Award className="size-3.5" />
-                    <span>View Published Scorecard</span>
-                  </button>
-                )}
+  // The only automatic submission: the timer reaching zero.
+  useEffect(() => {
+    if (secondsLeft === 0 && !autoSubmitted.current && !submit.isPending && !submit.isSuccess) {
+      autoSubmitted.current = true;
+      setConfirming(null);
+      submit.mutate(answers);
+    }
+  }, [secondsLeft, answers, submit]);
 
-                {isSubmitted && (
-                  <button
-                    type="button"
-                    onClick={() => setInspectedMcq(mcq)}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50/60 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 cursor-pointer"
-                  >
-                    <Eye className="size-3.5" />
-                    <span>View AI Evaluation Preview ({mcq.scorePct}%)</span>
-                  </button>
-                )}
+  if (quizQ.isPending) return <LoadingState rows={5} label="Loading weekly check" />;
+  if (quizQ.isError)
+    return (
+      <div className="space-y-3">
+        <ErrorState message={errorMessage(quizQ.error)} onRetry={() => quizQ.refetch()} />
+        <Button variant="secondary" onClick={onExit}>
+          <ArrowLeft aria-hidden="true" />
+          Back to weekly checks
+        </Button>
+      </div>
+    );
+  if (!quiz) return null;
+  if (quiz.status !== "available")
+    return (
+      <EmptyState
+        message="This weekly check is no longer open."
+        action={
+          <Button variant="secondary" onClick={onExit}>
+            Back to weekly checks
+          </Button>
+        }
+      />
+    );
+  if (questions.length === 0)
+    return (
+      <EmptyState
+        message="This weekly check has no questions."
+        action={
+          <Button variant="secondary" onClick={onExit}>
+            Back to weekly checks
+          </Button>
+        }
+      />
+    );
 
-                {isAvailable && (
-                  <button
-                    type="button"
-                    onClick={() => handleStartExam(mcq)}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2 text-xs font-semibold text-white hover:bg-emerald-700 shadow-2xs cursor-pointer"
-                  >
-                    <Play className="size-3.5" />
-                    <span>Start Weekly MCQ Assessment</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
+  const current = questions[Math.min(index, questions.length - 1)];
+  const answeredCount = questions.filter((q) => answers[q.id]).length;
+  const unanswered = questions.length - answeredCount;
+  const timeUp = secondsLeft === 0;
+  const locked = submit.isPending || timeUp;
+
+  const requestSubmit = () => {
+    if (unanswered > 0) setConfirming("submit");
+    else submit.mutate(answers);
+  };
+
+  return (
+    <Card className="space-y-5 p-0">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
+        <div>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+            Month {quiz.month_number} · Week {quiz.week_number}
+          </span>
+          <h2 className="text-base font-semibold text-text">{quiz.title}</h2>
+        </div>
+        <div
+          className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 font-mono text-sm font-semibold text-text"
+          aria-label="Time left"
+        >
+          <Timer className="size-4 text-muted" aria-hidden="true" />
+          <span>{secondsLeft === null ? "—" : formatTimer(secondsLeft)}</span>
+        </div>
       </div>
 
-      {/* Interactive Exam Modal */}
-      {activeTakingMcq && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/90 px-6 py-3.5">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                  Month {activeTakingMcq.monthNumber} · Week {activeTakingMcq.weekNumber} Assessment
-                </span>
-                <h3 className="text-sm font-bold text-slate-900">{activeTakingMcq.title}</h3>
-              </div>
+      <div className="space-y-5 px-6">
+        <p className="text-xs text-muted">
+          The timer is a guide for pacing. If it reaches zero, your answers so far are submitted automatically.
+          Leaving this page discards your answers.
+        </p>
 
-              <div className="flex items-center gap-3">
-                {/* Timer */}
-                <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-mono font-bold text-slate-700">
-                  <Timer className="size-3.5 text-emerald-600" />
-                  <span>{formatTimer(examSecondsLeft)}</span>
-                </div>
+        <div className="flex items-center justify-between text-xs text-muted">
+          <span className="font-semibold text-text">
+            Question {index + 1} of {questions.length}
+          </span>
+          <Badge tone="neutral">{current.skill}</Badge>
+        </div>
 
-                {/* Proctoring Pill */}
-                <div className="hidden sm:flex items-center gap-1 rounded-lg bg-emerald-100 px-2 py-1 text-[11px] font-bold text-emerald-800">
-                  <ShieldCheck className="size-3" />
-                  <span>0 Flags (Clean)</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Question Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span className="font-semibold text-slate-700">
-                  Question {currentQIndex + 1} of {questions.length}
-                </span>
-                <span>Topic: {currentQ?.subtopic || activeTakingMcq.skillArea}</span>
-              </div>
-
-              <h4 className="text-sm font-semibold text-slate-900 leading-relaxed">
-                {currentQ?.body || "What is the primary architectural advantage of using this framework standard?"}
-              </h4>
-
-              {/* Options */}
-              <div className="space-y-2.5 pt-2">
-                {currentQ?.options?.map((opt) => {
-                  const isSelected = answers[currentQIndex + 1] === opt.key;
-                  return (
-                    <button
-                      key={opt.key}
-                      type="button"
-                      onClick={() => handleSelectOption(opt.key)}
-                      className={`w-full text-left rounded-xl border p-3 text-xs transition-all flex items-start gap-3 cursor-pointer ${
-                        isSelected
-                          ? "border-emerald-500 bg-emerald-50/60 font-semibold text-emerald-900 shadow-2xs"
-                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 text-slate-700"
-                      }`}
-                    >
-                      <span
-                        className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-                          isSelected ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {opt.key}
-                      </span>
-                      <span className="flex-1">{opt.text}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Question Navigation Bubbles */}
-              <div className="pt-4 border-t border-slate-100">
-                <span className="text-[11px] font-medium text-slate-400 block mb-2">Question Navigation:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {questions.map((_, idx) => {
-                    const isAnswered = !!answers[idx + 1];
-                    const isCurrent = idx === currentQIndex;
-                    return (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setCurrentQIndex(idx)}
-                        className={`size-7 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          isCurrent
-                            ? "border-2 border-emerald-600 bg-emerald-50 text-emerald-800"
-                            : isAnswered
-                              ? "bg-emerald-600 text-white"
-                              : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                        }`}
-                      >
-                        {idx + 1}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3.5">
-              <button
-                type="button"
-                onClick={() => setCurrentQIndex((prev) => Math.max(0, prev - 1))}
-                disabled={currentQIndex === 0}
-                className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              >
-                Previous Question
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTakingMcq(null)}
-                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 cursor-pointer"
+        <fieldset className="space-y-3" disabled={locked}>
+          <legend className="whitespace-pre-line text-sm font-semibold leading-relaxed text-text">{current.body}</legend>
+          <div className="space-y-2.5 pt-2">
+            {current.options.map((opt) => {
+              const selected = answers[current.id] === opt.key;
+              return (
+                <label
+                  key={opt.key}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-primary-500 ${
+                    selected
+                      ? "border-primary-500 bg-primary-50 text-text"
+                      : "border-border bg-surface text-text hover:bg-surface-muted"
+                  }`}
                 >
-                  Exit Draft
-                </button>
-
-                {currentQIndex < questions.length - 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setCurrentQIndex((prev) => Math.min(questions.length - 1, prev + 1))}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer"
+                  <input
+                    type="radio"
+                    name={`q-${current.id}`}
+                    value={opt.key}
+                    checked={selected}
+                    onChange={() => setAnswers((prev) => ({ ...prev, [current.id]: opt.key }))}
+                    className="sr-only"
+                  />
+                  <span
+                    className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                      selected ? "bg-primary-600 text-white" : "bg-surface-muted text-muted"
+                    }`}
+                    aria-hidden="true"
                   >
-                    Next Question →
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={isSubmitting}
-                    onClick={handleFinishExam}
-                    className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs cursor-pointer flex items-center gap-1.5"
-                  >
-                    {isSubmitting ? "Evaluating with AI..." : "Submit Weekly MCQ"}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Submission Success Dialog */}
-      {submissionSuccessMcq && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl text-center space-y-4 animate-in fade-in zoom-in-95">
-            <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-              <CheckCircle2 className="size-6" />
-            </div>
-
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                Weekly MCQ Submitted Successfully!
-              </h3>
-              <p className="mt-1 text-xs text-slate-500">
-                Your answers for <strong>{submissionSuccessMcq.title}</strong> were recorded.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3.5 text-xs text-emerald-900 text-left space-y-1.5">
-              <div className="flex items-center justify-between font-bold">
-                <span>Provisional Score:</span>
-                <span className="text-sm font-extrabold text-emerald-700">
-                  {submissionSuccessMcq.scorePct}%
-                </span>
-              </div>
-              <p className="text-[11px] text-emerald-800">
-                The <strong>AI Assessment Evaluation Agent</strong> has synthesized your topic mastery and drafted the review report for your manager <strong>{submissionSuccessMcq.managerName}</strong>.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setInspectedMcq(submissionSuccessMcq);
-                  setSubmissionSuccessMcq(null);
-                }}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
-              >
-                Inspect AI Evaluation Preview
-              </button>
-              <button
-                type="button"
-                onClick={() => setSubmissionSuccessMcq(null)}
-                className="rounded-xl border border-slate-200 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Detailed Scorecard & AI Review Modal */}
-      {inspectedMcq && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl flex flex-col max-h-[85vh] overflow-y-auto animate-in fade-in zoom-in-95 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                  Month {inspectedMcq.monthNumber} · Week {inspectedMcq.weekNumber} Scorecard
-                </span>
-                <h3 className="text-base font-bold text-slate-900 mt-0.5">{inspectedMcq.title}</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setInspectedMcq(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Score & Telemetry Header */}
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <span className="text-[10px] font-medium text-slate-500 uppercase">Score</span>
-                <p className="mt-1 text-2xl font-extrabold text-emerald-700">{inspectedMcq.scorePct}%</p>
-                <span className="text-[10px] text-slate-400">
-                  {inspectedMcq.pointsObtained} of {inspectedMcq.totalPoints} points
-                </span>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <span className="text-[10px] font-medium text-slate-500 uppercase">Integrity</span>
-                <p className="mt-1 text-2xl font-extrabold text-emerald-700">100%</p>
-                <span className="text-[10px] text-slate-400">0 Flags (Clean)</span>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <span className="text-[10px] font-medium text-slate-500 uppercase">Status</span>
-                <p className="mt-1 text-sm font-bold text-slate-900 capitalize">
-                  {inspectedMcq.status === "published" ? "Published" : "Under Review"}
-                </p>
-                <span className="text-[10px] text-slate-400">
-                  {inspectedMcq.publishedAt ? `Published ${inspectedMcq.publishedAt}` : "Pending Manager"}
-                </span>
-              </div>
-            </div>
-
-            {/* AI Agent Topic Mastery Breakdown */}
-            {inspectedMcq.agentAnalysis && (
-              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                    <Sparkles className="size-3.5 text-emerald-600" />
-                    AI Topic Mastery Breakdown
+                    {opt.key}
                   </span>
-                  <span className="text-[11px] text-slate-500">Curated from weekly responses</span>
-                </div>
+                  <span className="flex-1 whitespace-pre-line">{opt.text}</span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
 
-                <div className="space-y-2">
-                  {inspectedMcq.agentAnalysis.topicMastery.map((tm, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs">
-                      <span className="text-slate-700">{tm.topic}</span>
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-bold ${
-                          tm.status === "Strong"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : tm.status === "Developing"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-rose-100 text-rose-800"
-                        }`}
-                      >
-                        {tm.scorePct}% ({tm.status})
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Manager Feedback */}
-            {inspectedMcq.managerNotes && (
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3.5 text-xs">
-                <span className="font-bold text-emerald-900 block mb-1">
-                  Manager Review & Feedback:
-                </span>
-                <p className="text-emerald-800 leading-relaxed">{inspectedMcq.managerNotes}</p>
-              </div>
-            )}
-
-            {/* AI Recommended Learning Notes */}
-            {inspectedMcq.agentAnalysis?.recommendedNotes && (
-              <div className="space-y-2 border-t border-slate-100 pt-3 text-xs">
-                <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-                  <BookOpen className="size-3.5 text-slate-500" />
-                  Recommended Closed-Loop Practice Notes:
-                </span>
-                {inspectedMcq.agentAnalysis.recommendedNotes.map((note, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between rounded-lg bg-slate-50 p-2.5 border border-slate-100"
-                  >
-                    <div>
-                      <span className="font-bold text-slate-800">{note.title}</span>
-                      <span className="block text-[11px] text-slate-500">{note.desc}</span>
-                    </div>
-                    <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                      {note.count} Practice Qs
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setInspectedMcq(null)}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer"
-              >
-                Close Scorecard
-              </button>
-            </div>
+        {/* Navigation */}
+        <div className="border-t border-border pt-4">
+          <span className="mb-2 block text-xs text-muted">
+            Answered {answeredCount} of {questions.length}
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {questions.map((q, idx) => {
+              const isAnswered = !!answers[q.id];
+              const isCurrent = idx === index;
+              return (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => setIndex(idx)}
+                  aria-label={`Question ${idx + 1}${isAnswered ? ", answered" : ", not answered"}`}
+                  aria-current={isCurrent ? "step" : undefined}
+                  className={`size-8 rounded-lg text-xs font-bold transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 ${
+                    isCurrent
+                      ? "border-2 border-primary-600 bg-primary-50 text-primary-700"
+                      : isAnswered
+                        ? "bg-primary-600 text-white"
+                        : "bg-surface-muted text-muted hover:text-text"
+                  }`}
+                >
+                  {idx + 1}
+                </button>
+              );
+            })}
           </div>
         </div>
+
+        {confirming === "submit" && !locked && (
+          <div role="alertdialog" aria-label="Unanswered questions" className="rounded-xl bg-warning-50 p-4 text-sm text-warning-800">
+            <p className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="size-4" aria-hidden="true" />
+              You have {unanswered} unanswered {unanswered === 1 ? "question" : "questions"}.
+            </p>
+            <p className="mt-1">Unanswered questions are marked incorrect. Submit anyway?</p>
+            <div className="mt-3 flex gap-2">
+              <Button size="sm" onClick={() => submit.mutate(answers)}>
+                Submit anyway
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setConfirming(null)}>
+                Keep answering
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {confirming === "exit" && !locked && (
+          <div role="alertdialog" aria-label="Leave weekly check" className="rounded-xl bg-warning-50 p-4 text-sm text-warning-800">
+            <p className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="size-4" aria-hidden="true" />
+              Leave without submitting?
+            </p>
+            <p className="mt-1">Your answers will not be saved. The check stays open and the timer restarts.</p>
+            <div className="mt-3 flex gap-2">
+              <Button size="sm" variant="secondary" onClick={onExit}>
+                Leave
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setConfirming(null)}>
+                Keep answering
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {timeUp && submit.isPending && (
+          <p role="status" className="rounded-xl bg-info-50 p-3 text-sm text-info-700">
+            Time is up — submitting your answers…
+          </p>
+        )}
+
+        {submit.isError && (
+          <ErrorState message={`Could not submit: ${errorMessage(submit.error)}`} onRetry={() => submit.mutate(answers)} />
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-muted px-6 py-4">
+        <Button variant="secondary" onClick={() => setIndex((i) => Math.max(0, i - 1))} disabled={index === 0}>
+          Previous
+        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            disabled={submit.isPending}
+            onClick={() => (answeredCount > 0 ? setConfirming("exit") : onExit())}
+          >
+            Exit
+          </Button>
+          {index < questions.length - 1 ? (
+            <Button variant="secondary" onClick={() => setIndex((i) => Math.min(questions.length - 1, i + 1))}>
+              Next
+            </Button>
+          ) : null}
+          <Button onClick={requestSubmit} disabled={locked}>
+            {submit.isPending ? "Submitting…" : "Submit weekly check"}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ------------------------------------------------------------------ results
+
+function QuizResults({ id, justSubmitted, onBack }: { id: string; justSubmitted?: boolean; onBack: () => void }) {
+  const quizQ = useQuery({ queryKey: quizKey(id), queryFn: () => internshipApi.quiz(id) });
+
+  const back = (
+    <Button variant="secondary" onClick={onBack}>
+      <ArrowLeft aria-hidden="true" />
+      Back to weekly checks
+    </Button>
+  );
+
+  if (quizQ.isPending) return <LoadingState rows={5} label="Loading results" />;
+  if (quizQ.isError)
+    return (
+      <div className="space-y-3">
+        <ErrorState message={errorMessage(quizQ.error)} onRetry={() => quizQ.refetch()} />
+        {back}
+      </div>
+    );
+  const quiz = quizQ.data;
+  const results = quiz.results;
+  if (quiz.status !== "submitted" || !results)
+    return <EmptyState message="Results are not available for this weekly check." action={back} />;
+
+  const detailById = new Map(results.detail.map((d) => [d.id, d]));
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {back}
+        {justSubmitted && (
+          <p role="status" className="flex items-center gap-1.5 text-sm font-medium text-success-700">
+            <CheckCircle2 className="size-4" aria-hidden="true" />
+            Your answers were submitted.
+          </p>
+        )}
+      </div>
+
+      <Card>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+          Month {quiz.month_number} · Week {quiz.week_number}
+        </span>
+        <h2 className="text-lg font-semibold text-text">{quiz.title}</h2>
+        <p className="text-xs text-muted">Submitted {formatDate(quiz.submitted_at)}</p>
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 text-center">
+            <span className="text-xs font-medium text-primary-700">Score</span>
+            <p className="mt-1 text-3xl font-bold text-primary-700">{results.score_pct}%</p>
+          </div>
+          <div className="rounded-xl border border-border bg-surface-muted p-4 text-center">
+            <span className="text-xs font-medium text-muted">Correct answers</span>
+            <p className="mt-1 text-3xl font-bold text-text">
+              {results.correct} <span className="text-base font-normal text-muted">/ {results.total}</span>
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {results.misconceptions.length > 0 && (
+        <Card className="border-warning-500 bg-warning-50">
+          <CardTitle className="flex items-center gap-1.5 text-warning-800">
+            <Lightbulb className="size-4" aria-hidden="true" />
+            Ideas worth revisiting
+          </CardTitle>
+          <p className="mt-1 text-sm text-warning-800">
+            You chose answers based on these misunderstandings more than once:
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-warning-800">
+            {results.misconceptions.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {results.skills.length > 0 && (
+        <section className="space-y-3" aria-labelledby="skill-results-title">
+          <h3 id="skill-results-title" className="text-sm font-semibold text-text">
+            Results by skill
+          </h3>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Skill</TH>
+                <TH className="text-right">Correct</TH>
+                <TH className="text-right">Score</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {results.skills.map((s) => (
+                <TR key={s.skill}>
+                  <TD className="font-medium">{s.skill}</TD>
+                  <TD className="text-right tabular-nums">
+                    {s.correct} / {s.total}
+                  </TD>
+                  <TD className="text-right tabular-nums">{s.score_pct}%</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+          <p className="text-xs text-muted">These results update your skill matrix.</p>
+        </section>
+      )}
+
+      <section className="space-y-3" aria-labelledby="question-results-title">
+        <h3 id="question-results-title" className="text-sm font-semibold text-text">
+          Question by question
+        </h3>
+        <ol className="space-y-4">
+          {quiz.questions.map((q, idx) => {
+            const d = detailById.get(q.id);
+            const chosen = d?.chosen ?? null;
+            const correctKey = d?.correct_key ?? q.correct_key;
+            const explanation = d?.explanation || q.explanation;
+            return (
+              <li key={q.id}>
+                <Card>
+                  <CardHeader className="mb-3">
+                    <div>
+                      <CardDescription>
+                        Question {idx + 1} · {q.skill}
+                      </CardDescription>
+                      <p className="mt-1 whitespace-pre-line text-sm font-semibold text-text">{q.body}</p>
+                    </div>
+                    {d &&
+                      (d.correct ? (
+                        <Badge tone="success">
+                          <CheckCircle2 className="size-3.5" aria-hidden="true" />
+                          Correct
+                        </Badge>
+                      ) : (
+                        <Badge tone="danger">
+                          <XCircle className="size-3.5" aria-hidden="true" />
+                          {chosen ? "Incorrect" : "Not answered"}
+                        </Badge>
+                      ))}
+                  </CardHeader>
+                  <ul className="space-y-2">
+                    {q.options.map((opt) => {
+                      const isCorrect = opt.key === correctKey;
+                      const isChosen = opt.key === chosen;
+                      return (
+                        <li
+                          key={opt.key}
+                          className={`flex items-start gap-3 rounded-lg border p-2.5 text-sm ${
+                            isCorrect
+                              ? "border-success-500 bg-success-50"
+                              : isChosen
+                                ? "border-danger-500 bg-danger-50"
+                                : "border-border bg-surface"
+                          }`}
+                        >
+                          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-bold text-muted">
+                            {opt.key}
+                          </span>
+                          <span className="flex-1 whitespace-pre-line text-text">{opt.text}</span>
+                          {isCorrect && <span className="text-xs font-semibold text-success-700">Correct answer</span>}
+                          {isChosen && !isCorrect && (
+                            <span className="text-xs font-semibold text-danger-700">Your answer</span>
+                          )}
+                          {isChosen && isCorrect && (
+                            <span className="sr-only">(your answer)</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {explanation && (
+                    <p className="mt-3 rounded-lg bg-surface-muted p-3 text-sm text-text">
+                      <span className="font-semibold">Explanation: </span>
+                      {explanation}
+                    </p>
+                  )}
+                </Card>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ page
+
+export function MenteeWeeklyMCQPage() {
+  usePageTitle("Weekly MCQs & Knowledge Checks");
+  const [view, setView] = useState<View>({ mode: "list" });
+  const toList = () => setView({ mode: "list" });
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <Badge tone="primary">
+          <FileQuestion className="size-3.5" aria-hidden="true" />
+          Weekly knowledge checks
+        </Badge>
+        <h1 className="mt-1 text-xl font-bold tracking-tight text-text sm:text-2xl">Weekly Knowledge Checks</h1>
+        <p className="mt-1 max-w-2xl text-sm text-muted">
+          A short multiple-choice check on this week&apos;s topics. Your mentor approves each check before it
+          appears here. Scores are calculated automatically when you submit, and your answers update your skill
+          matrix.
+        </p>
+      </div>
+
+      {view.mode === "list" && (
+        <QuizList onOpen={(q) => setView(q.status === "submitted" ? { mode: "results", id: q.id } : { mode: "take", id: q.id })} />
+      )}
+      {view.mode === "take" && (
+        <TakeQuiz
+          key={view.id}
+          id={view.id}
+          onExit={toList}
+          onSubmitted={(q) => setView({ mode: "results", id: q.id, justSubmitted: true })}
+        />
+      )}
+      {view.mode === "results" && (
+        <QuizResults key={view.id} id={view.id} justSubmitted={view.justSubmitted} onBack={toList} />
       )}
     </div>
   );

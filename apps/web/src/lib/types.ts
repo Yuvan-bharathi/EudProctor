@@ -45,6 +45,10 @@ export interface Question {
 
 export interface Exam {
   id: string;
+  /** Assessment ID shown to mentors and candidates, e.g. "ASM-7K3QX9" */
+  code?: string | null;
+  /** Passing mark as % of total marks (null = not set) */
+  pass_pct?: number | null;
   course_id: string;
   course_name?: string;
   title: string;
@@ -74,6 +78,7 @@ export interface Assignment {
   candidate_id: string;
   candidate_name: string;
   candidate_email: string;
+  candidate_username?: string | null;
   candidate_phone?: string;
   link_sent_at: string | null;
   link_used_at: string | null;

@@ -8,6 +8,8 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Copy,
+  KeyRound,
   Download,
   Eye,
   FileSpreadsheet,
@@ -29,10 +31,8 @@ import {
   Trash2,
   Upload,
   Users,
-  Wand2,
   X,
   Bot,
-  Lightbulb,
   RefreshCw,
   ExternalLink,
   Clock,
@@ -49,14 +49,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { CoursePicker } from "@/features/mentor/CoursePicker";
 import { ProctoringTab } from "@/features/proctoring/ProctoringTab";
 import {
   type AIQuestionSuggestion,
-  convertAIQuestionsToQuestions,
   generateAIQuestions,
-  generateOptionsForStem,
-  generateSingleQuestion,
   recommendAIQuestions,
 } from "@/lib/aiQuestionGenerator";
 import { api, errorMessage } from "@/lib/api";
@@ -75,7 +71,6 @@ import {
   type LiveCandidateRow,
   mockLiveCandidates,
   mockQuestionsList,
-  saveExamDetailToStorage,
 } from "@/lib/mockData";
 import { type Assignment, difficultyLabel, type ExamDetail, type Question } from "@/lib/types";
 
@@ -83,6 +78,17 @@ export type WorkspaceTab = "overview" | "questions" | "candidates" | "settings" 
 
 interface AssessmentWorkspaceProps {
   initialTab?: WorkspaceTab;
+}
+
+/** Summarise the Invitation Agent's real per-candidate outcome (never assume success). */
+function describeDispatch(rows: Assignment[]): string {
+  const sent = rows.filter((r) => r.invitation_status === "Sent" || r.invitation_status === "Delivered").length;
+  const failed = rows.filter((r) => r.invitation_status === "Failed");
+  if (failed.length > 0) {
+    const reason = String(failed[0].accommodations?.error ?? "unknown error");
+    return `${sent} invitation(s) emailed, ${failed.length} FAILED — ${reason}`;
+  }
+  return `${sent} invitation email(s) sent.`;
 }
 
 export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorkspaceProps) {
@@ -110,6 +116,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   });
 
   const exam = examQuery.data;
+  // Server truth: invitations can only be dispatched once the assessment is published.
+  const isPublished = exam?.status === "scheduled";
   usePageTitle(`${exam?.title ?? "Assessment Management"} · EduProctor`);
 
   // State for questions (CRUD)
@@ -268,6 +276,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     const startIso = new Date(`${scheduleDate}T${scheduleStartTime}:00`).toISOString();
     const endIso = new Date(`${scheduleDate}T${scheduleEndTime}:00`).toISOString();
 
+
     try {
       await api(`/exams/${examId}`, {
         method: "PATCH",
@@ -278,7 +287,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         },
       });
 
-      let sentCount = 0;
+      let summary = "Invitation emails were not sent (dispatch unchecked).";
       if (sendTestLinkEmails) {
         const linksRes = await api<Assignment[]>(`/exams/${examId}/send-links`, {
           body: {
@@ -287,7 +296,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
             test_recipient: yopmailTestMode ? yopmailTestRecipient.trim() : undefined,
           },
         });
-        sentCount = linksRes?.length || 0;
+        setAssignments(linksRes);
+        summary = describeDispatch(linksRes);
       }
 
       qc.invalidateQueries({ queryKey: ["exam", examId] });
@@ -295,7 +305,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       setAssessmentStatus("scheduled");
       setIsPublishing(false);
       setPublishModalOpen(false);
-      showToast(`Assessment successfully published and scheduled! Secure test links have been sent to ${sentCount} candidate(s).`);
+      showToast(`Assessment published and scheduled. ${summary}`);
     } catch (err) {
       setIsPublishing(false);
       showToast(errorMessage(err));
@@ -315,11 +325,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     if (exam?.duration_min) setSettingsDuration(exam.duration_min);
     if (exam?.flag_threshold_s) setSettingsThreshold(exam.flag_threshold_s);
     if (exam?.shuffle !== undefined) setSettingsShuffle(exam.shuffle);
+    if (exam?.pass_pct) setSettingsPassPct(exam.pass_pct);
   }, [exam]);
 
   // State for candidate removal confirmation
   const [candidateToRemove, setCandidateToRemove] = useState<Assignment | null>(null);
-  const [timelineCandidate, setTimelineCandidate] = useState<Assignment | null>(null);
 
   // State for adding candidate form modal
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
@@ -348,7 +358,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [invitationStatusFilter, setInvitationStatusFilter] = useState("all");
 
   // State for YOPmail Testing & LangGraph Invitation Agent
-  const [yopmailTestMode, setYopmailTestMode] = useState(true);
+  // Off by default: when on, every invitation is redirected to the shared YOPmail test
+  // inbox instead of the candidate's real email address.
+  const [yopmailTestMode, setYopmailTestMode] = useState(false);
   const [yopmailTestRecipient, setYopmailTestRecipient] = useState("eduproctor-test@yopmail.com");
 
   // State for Live Stream Filter inside Candidates tab
@@ -380,7 +392,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [inModalAiRecs, setInModalAiRecs] = useState<AIQuestionSuggestion[]>([]);
   const [isInModalAiLoading, setIsInModalAiLoading] = useState(false);
   const [inModalAiError, setInModalAiError] = useState<string | null>(null);
-  const manualEditorRef = useRef<HTMLDivElement>(null);
+  const manualEditorRef = useRef<HTMLFormElement>(null);
 
   // In-Workspace AI Copilot Agent State
   const [showAiCopilot, setShowAiCopilot] = useState(false);
@@ -388,6 +400,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [copilotDifficulty, setCopilotDifficulty] = useState<0 | 1 | 2 | 3>(0);
   const [copilotCount, setCopilotCount] = useState<number>(3);
   const [copilotSuggestions, setCopilotSuggestions] = useState<AIQuestionSuggestion[]>([]);
+  const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+  const [suggestionDraft, setSuggestionDraft] = useState<AIQuestionSuggestion | null>(null);
+  const [suggestionDraftError, setSuggestionDraftError] = useState<string | null>(null);
+  const [addingSuggestionIds, setAddingSuggestionIds] = useState<Set<string>>(() => new Set());
   const [isCopilotGenerating, setIsCopilotGenerating] = useState(false);
   const [copilotStatusText, setCopilotStatusText] = useState("Agent Ready");
 
@@ -404,7 +420,8 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   const [settingsDuration, setSettingsDuration] = useState(exam?.duration_min ?? 60);
   const [settingsThreshold, setSettingsThreshold] = useState(exam?.flag_threshold_s ?? 3);
   const [settingsShuffle, setSettingsShuffle] = useState(exam?.shuffle ?? true);
-  const [settingsPassPct, setSettingsPassPct] = useState(50);
+  const [settingsPassPct, setSettingsPassPct] = useState(exam?.pass_pct ?? 50);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Filtered enrolled candidates
   const filteredAssignments = useMemo(() => {
@@ -470,6 +487,15 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     });
   }, [liveCandidates, liveSearch, liveStatusFilter]);
 
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      showToast(`${label} copied.`);
+    } catch {
+      showToast(`Could not copy. ${label}: ${value}`);
+    }
+  };
+
   // Dispatch links mutation via LangGraph Assessment Invitation Agent
   const sendLinksMutation = useMutation({
     mutationFn: (vars?: { forceResend?: boolean }) =>
@@ -481,8 +507,9 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         },
       }),
     onSuccess: (data) => {
+      setAssignments(data);
       qc.invalidateQueries({ queryKey: ["exam", examId] });
-      showToast(`LangGraph Agent processed invitations for ${data?.length || 0} candidate(s).`);
+      showToast(describeDispatch(data));
     },
     onError: (err) => showToast(errorMessage(err)),
   });
@@ -518,7 +545,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
   });
 
   // Candidate Actions: Add via Validated Input Form
-  const handleCreateCandidate = (e: FormEvent) => {
+  const handleCreateCandidate = async (e: FormEvent) => {
     e.preventDefault();
     setCandFormError(null);
 
@@ -550,28 +577,21 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       return;
     }
 
-    const newCandidate: Assignment = {
-      id: `asg-${Date.now()}`,
-      candidate_id: `cand-${Date.now()}`,
-      candidate_name: name,
-      candidate_email: email,
-      candidate_phone: phone,
-      link_sent_at: candAutoSend ? new Date().toISOString() : null,
-      link_used_at: null,
-      link_expires_at: new Date(Date.now() + 7 * 864e5).toISOString(),
-      accommodations: {},
-      status: "Not started",
-      score_pct: null,
-      flags: 0,
-      glances: 0,
-      session_id: `s-${Date.now()}`,
-    };
-
     setIsAddingCandidate(true);
     try {
-      const updatedAssignments = [newCandidate, ...assignments];
+      // Persist the candidate in the DB. Enrolment itself never emails: invitations are
+      // dispatched by the Invitation Agent when the assessment is published. If it is
+      // already published and "dispatch" is ticked, the agent emails this candidate now.
+      const updatedAssignments = await api<Assignment[]>(`/exams/${examId}/import-candidates`, {
+        body: {
+          candidates: [{ name, email, phone, rollNumber: roll }],
+          send_invitations: candAutoSend && isPublished,
+          test_mode: yopmailTestMode,
+          test_recipient: yopmailTestMode ? yopmailTestRecipient.trim() : undefined,
+        },
+      });
       setAssignments(updatedAssignments);
-      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
 
       // Reset Form
       setCandFullName("");
@@ -581,21 +601,35 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       setCandFormError(null);
       setAddStudentModalOpen(false);
 
-      showToast(`Candidate "${name}" successfully enrolled! Single-use test link generated.`);
+      const saved = updatedAssignments.find((a) => a.candidate_email.toLowerCase() === email);
+      const inv = saved?.invitation_status ?? "Not Sent";
+      if (!isPublished) {
+        showToast(`Candidate "${name}" enrolled. The assessment link will be emailed when you publish the assessment.`);
+      } else if (!candAutoSend) {
+        showToast(`Candidate "${name}" enrolled. Use "Send Invitations" to email the assessment link.`);
+      } else if (inv === "Failed") {
+        showToast(`Candidate "${name}" enrolled, but the invitation email FAILED: ${String(saved?.accommodations?.error ?? "check SMTP settings")}`);
+      } else {
+        showToast(`Candidate "${name}" enrolled and invitation email sent.`);
+      }
+    } catch (err) {
+      setCandFormError(errorMessage(err));
     } finally {
       setIsAddingCandidate(false);
     }
   };
 
   // Candidate Actions: Remove (CRUD)
-  const handleRemoveCandidate = (assignment: Assignment) => {
+  const handleRemoveCandidate = async (assignment: Assignment) => {
     setIsRemovingCandidate(true);
     try {
-      const updatedAssignments = assignments.filter((a) => a.id !== assignment.id);
-      setAssignments(updatedAssignments);
-      saveExamDetailToStorage(examId, { assignments: updatedAssignments });
+      await api(`/exams/${examId}/candidates/${assignment.candidate_id}`, { method: "DELETE" });
+      setAssignments((prev) => prev.filter((a) => a.id !== assignment.id));
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
       setCandidateToRemove(null);
       showToast(`Removed candidate "${assignment.candidate_name}" from this assessment.`);
+    } catch (err) {
+      showToast(errorMessage(err));
     } finally {
       setIsRemovingCandidate(false);
     }
@@ -761,27 +795,34 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     if (isSavingQuestion) return;
     if (!customBody.trim() || !customOptionA.trim() || !customOptionB.trim()) return;
 
+    // Options C and D are optional: send only the ones that are filled in.
+    const options = [
+      { key: "A", text: customOptionA.trim() },
+      { key: "B", text: customOptionB.trim() },
+      { key: "C", text: customOptionC.trim() },
+      { key: "D", text: customOptionD.trim() },
+    ]
+      .filter((o) => o.text)
+      .map((o) => ({ ...o, is_correct: o.key === customCorrectKey }));
+    if (!options.some((o) => o.is_correct)) {
+      showToast(`Option ${customCorrectKey} is marked correct but is empty. Fill it in or pick another answer.`);
+      return;
+    }
+    const payload = {
+      body: customBody.trim(),
+      difficulty: customDifficulty,
+      marks: customMarks,
+      subtopic: customTopic.trim() || exam?.course_name || "General",
+      explanation: customExplanation.trim() || undefined,
+      options,
+    };
+
     setIsSavingQuestion(true);
     try {
-      const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
-        body: {
-          questions: [
-            {
-              body: customBody.trim(),
-              difficulty: customDifficulty,
-              marks: customMarks,
-              subtopic: customTopic.trim() || exam?.course_name || "General",
-              explanation: customExplanation.trim() || undefined,
-              options: [
-                { key: "A", text: customOptionA.trim(), is_correct: customCorrectKey === "A" },
-                { key: "B", text: customOptionB.trim(), is_correct: customCorrectKey === "B" },
-                { key: "C", text: customOptionC.trim(), is_correct: customCorrectKey === "C" },
-                { key: "D", text: customOptionD.trim(), is_correct: customCorrectKey === "D" },
-              ],
-            },
-          ],
-        },
-      });
+      // Editing updates the existing question in place; creating adds a new one.
+      const res = editingQuestionId
+        ? await api<ExamDetail>(`/exams/${examId}/questions/${editingQuestionId}`, { method: "PUT", body: payload })
+        : await api<ExamDetail>(`/exams/${examId}/import-questions`, { body: { questions: [payload] } });
       if (res?.questions) {
         setQuestions(res.questions);
       }
@@ -808,16 +849,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         body: { question_ids: updated.map((q) => q.id) },
       });
       setQuestions(updated);
-      saveExamDetailToStorage(examId, { questions: updated });
       qc.invalidateQueries({ queryKey: ['exam', examId] });
       qc.invalidateQueries({ queryKey: ['exams'] });
       setQuestionToDelete(null);
       showToast('Question deleted successfully.');
-    } catch {
-      setQuestions(updated);
-      saveExamDetailToStorage(examId, { questions: updated });
-      setQuestionToDelete(null);
-      showToast('Question deleted successfully.');
+    } catch (err) {
+      // Keep the question on screen: it was not removed on the server.
+      showToast(`Could not delete the question: ${errorMessage(err)}`);
     } finally {
       setIsDeletingQuestion(false);
     }
@@ -831,7 +869,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
         body: { question_ids: [] },
       });
       setQuestions([]);
-      saveExamDetailToStorage(examId, { questions: [] });
       qc.invalidateQueries({ queryKey: ['exam', examId] });
       qc.invalidateQueries({ queryKey: ['exams'] });
       setDeleteAllModalOpen(false);
@@ -861,105 +898,103 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
       }
       const finalItems = results.slice(0, copilotCount);
       setCopilotSuggestions(finalItems);
+      setEditingSuggestionId(null);
+      setSuggestionDraft(null);
       setIsCopilotGenerating(false);
       setCopilotStatusText(`Agent ready · Synthesized ${finalItems.length} question(s) for "${topicToUse}".`);
       showToast(`AI Agent generated ${finalItems.length} question recommendation(s).`);
     }, 700);
   };
 
-  const handleQuickAddAiQuestion = async (suggestion: AIQuestionSuggestion) => {
+  /** Returns an error message if the suggestion can't be used as-is, else null. */
+  const validateSuggestion = (s: AIQuestionSuggestion): string | null => {
+    if (!s.body.trim()) return "Question statement cannot be empty.";
+    if (s.options.some((o) => !o.text.trim())) return "All answer options must be filled in.";
+    if (s.options.filter((o) => o.is_correct).length !== 1) return "Select exactly one correct answer.";
+    if (!(s.marks > 0)) return "Marks must be greater than 0.";
+    return null;
+  };
+
+  /** Persist one or more AI suggestions to the assessment (DB) in a single request. */
+  const addSuggestionsToAssessment = async (items: AIQuestionSuggestion[]) => {
+    for (const s of items) {
+      const problem = validateSuggestion(s);
+      if (problem) {
+        showToast(`Cannot add "${s.body.slice(0, 40)}…": ${problem}`);
+        return false;
+      }
+    }
+    const ids = new Set(items.map((s) => s.id));
+    setAddingSuggestionIds((prev) => new Set([...prev, ...ids]));
     try {
       const res = await api<ExamDetail>(`/exams/${examId}/import-questions`, {
         body: {
-          questions: [
-            {
-              body: suggestion.body,
-              difficulty: suggestion.difficulty,
-              marks: suggestion.marks,
-              subtopic: suggestion.topic || exam?.course_name || "General",
-              explanation: suggestion.explanation || undefined,
-              options: suggestion.options.map((opt) => ({
-                key: opt.key,
-                text: opt.text,
-                is_correct: opt.is_correct,
-              })),
-            },
-          ],
+          questions: items.map((s) => ({
+            body: s.body.trim(),
+            difficulty: s.difficulty,
+            marks: s.marks,
+            subtopic: s.topic || exam?.course_name || "General",
+            explanation: s.explanation?.trim() || undefined,
+            options: s.options.map((opt) => ({ key: opt.key, text: opt.text.trim(), is_correct: opt.is_correct })),
+          })),
         },
       });
-      if (res?.questions) {
-        setQuestions(res.questions);
-      } else {
-        const converted = convertAIQuestionsToQuestions([suggestion], "c1");
-        const updated = [...converted, ...questions];
-        setQuestions(updated);
-        saveExamDetailToStorage(examId, { questions: updated });
-      }
+      if (res?.questions) setQuestions(res.questions);
       qc.invalidateQueries({ queryKey: ["exam", examId] });
       qc.invalidateQueries({ queryKey: ["exams"] });
-      setCopilotSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
-      showToast("Question added to assessment & saved to TiDB Cloud.");
-    } catch {
-      const converted = convertAIQuestionsToQuestions([suggestion], "c1");
-      const updated = [...converted, ...questions];
-      setQuestions(updated);
-      saveExamDetailToStorage(examId, { questions: updated });
-      setCopilotSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
-      showToast("Question added to assessment.");
+      setCopilotSuggestions((prev) => prev.filter((s) => !ids.has(s.id)));
+      if (editingSuggestionId && ids.has(editingSuggestionId)) {
+        setEditingSuggestionId(null);
+        setSuggestionDraft(null);
+      }
+      showToast(items.length === 1 ? "Question added to assessment." : `${items.length} questions added to assessment.`);
+      return true;
+    } catch (err) {
+      showToast(`Could not add question: ${errorMessage(err)}`);
+      return false;
+    } finally {
+      setAddingSuggestionIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
     }
   };
 
-  const handleCustomizeAiQuestion = (suggestion: AIQuestionSuggestion) => {
-    setCustomBody(suggestion.body);
-    setCustomTopic(suggestion.topic || exam?.course_name || "Full Stack Development");
-    setCustomMarks(suggestion.marks);
-    setCustomDifficulty((suggestion.difficulty as 1 | 2 | 3) || 2);
-    setCustomExplanation(suggestion.explanation || "");
-    setCustomOptionA(suggestion.options[0]?.text || "");
-    setCustomOptionB(suggestion.options[1]?.text || "");
-    setCustomOptionC(suggestion.options[2]?.text || "");
-    setCustomOptionD(suggestion.options[3]?.text || "");
-    const correctOpt = suggestion.options.find((o) => o.is_correct);
-    setCustomCorrectKey((correctOpt?.key as "A" | "B" | "C" | "D") || "A");
-    setEditingQuestionId(null);
-    setCustomQuestionModalOpen(true);
-    showToast("Loaded AI question into custom editor.");
+  const handleQuickAddAiQuestion = (suggestion: AIQuestionSuggestion) => addSuggestionsToAssessment([suggestion]);
+
+  // Inline (in-card) editing of a recommended question — no modal / page switch.
+  const startEditSuggestion = (s: AIQuestionSuggestion) => {
+    setEditingSuggestionId(s.id);
+    setSuggestionDraft({ ...s, options: s.options.map((o) => ({ ...o })) });
+    setSuggestionDraftError(null);
   };
 
-  // In-Modal AI Actions for Custom Question Modal
-  const handleAiAutoCompleteOptions = () => {
-    if (!customBody.trim()) {
-      showToast("Type a question stem first so the AI agent can synthesize options.");
+  const cancelEditSuggestion = () => {
+    setEditingSuggestionId(null);
+    setSuggestionDraft(null);
+    setSuggestionDraftError(null);
+  };
+
+  const saveSuggestionDraft = (thenUse: boolean) => {
+    if (!suggestionDraft) return;
+    const problem = validateSuggestion(suggestionDraft);
+    if (problem) {
+      setSuggestionDraftError(problem);
       return;
     }
-    const generated = generateOptionsForStem(customBody, customTopic || exam?.course_name);
-    setCustomOptionA(generated.options[0]?.text || "");
-    setCustomOptionB(generated.options[1]?.text || "");
-    setCustomOptionC(generated.options[2]?.text || "");
-    setCustomOptionD(generated.options[3]?.text || "");
-    setCustomCorrectKey("A");
-    setCustomExplanation(generated.explanation);
-    setCustomMarks(generated.marks);
-    setCustomDifficulty(generated.difficulty as 1 | 2 | 3);
-    showToast("AI Agent generated 4 options with distractor misconceptions!");
+    const saved = suggestionDraft;
+    setCopilotSuggestions((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
+    if (thenUse) {
+      void addSuggestionsToAssessment([saved]);
+    } else {
+      cancelEditSuggestion();
+      showToast("Changes saved. Click \"Use Question\" to add it to the assessment.");
+    }
   };
 
-  const handleAiSuggestForCustomTopic = () => {
-    const topicToUse = customTopic.trim() || exam?.course_name || "Full Stack Architecture";
-    const sug = generateSingleQuestion(topicToUse, customDifficulty);
-    setCustomBody(sug.body);
-    setCustomTopic(sug.topic);
-    setCustomMarks(sug.marks);
-    setCustomDifficulty(sug.difficulty as 1 | 2 | 3);
-    setCustomExplanation(sug.explanation);
-    setCustomOptionA(sug.options[0]?.text || "");
-    setCustomOptionB(sug.options[1]?.text || "");
-    setCustomOptionC(sug.options[2]?.text || "");
-    setCustomOptionD(sug.options[3]?.text || "");
-    const correctOpt = sug.options.find((o) => o.is_correct);
-    setCustomCorrectKey((correctOpt?.key as "A" | "B" | "C" | "D") || "A");
-    showToast(`AI Agent drafted question on "${topicToUse}".`);
-  };
+
+
 
   // Questions Actions: Excel Upload
   const handleOpenExcelModal = () => {
@@ -1035,52 +1070,62 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
     }
   };
 
-  const handleImportParsedCandidates = () => {
+  const handleImportParsedCandidates = async () => {
     if (isImportingCandidates || parsedCandidateRows.length === 0) return;
     setIsImportingCandidates(true);
     try {
-
-    const newAssignments: Assignment[] = parsedCandidateRows.map((row, idx) => ({
-      id: `a-xl-${Date.now()}-${idx}`,
-      candidate_id: `cand-xl-${Date.now()}-${idx}`,
-      candidate_name: row.name,
-      candidate_email: row.email,
-      candidate_phone: row.phone,
-      status: "Not started",
-      score_pct: null,
-      flags: 0,
-      glances: 0,
-      session_id: `s-xl-${idx}`,
-      link_sent_at: new Date().toISOString(),
-      link_used_at: null,
-      link_expires_at: null,
-      accommodations: {},
-    }));
-
-    const updated = [...newAssignments, ...assignments];
-    setAssignments(updated);
-    saveExamDetailToStorage(examId, { assignments: updated });
-    setCandidateExcelModalOpen(false);
-    setParsedCandidateRows([]);
-    showToast(`Successfully enrolled ${newAssignments.length} candidate(s) from Excel.`);
+      const count = parsedCandidateRows.length;
+      const updated = await api<Assignment[]>(`/exams/${examId}/import-candidates`, {
+        body: {
+          candidates: parsedCandidateRows.map((row) => ({
+            name: row.name,
+            email: row.email,
+            phone: row.phone,
+          })),
+          // Bulk import only enrols; links go out on publish or via "Send Invitations".
+          send_invitations: false,
+        },
+      });
+      setAssignments(updated);
+      qc.invalidateQueries({ queryKey: ["exam", examId] });
+      setCandidateExcelModalOpen(false);
+      setParsedCandidateRows([]);
+      showToast(
+        isPublished
+          ? `Enrolled ${count} candidate(s). Click "Send Invitations" to email their assessment links.`
+          : `Enrolled ${count} candidate(s). Links will be emailed when you publish the assessment.`,
+      );
+    } catch (err) {
+      setCandidateExcelError(errorMessage(err));
     } finally {
       setIsImportingCandidates(false);
     }
   };
 
   // Settings Save
-  const handleSaveSettings = (e: FormEvent) => {
+  const handleSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
-    saveExamDetailToStorage(examId, {
-      title: settingsTitle,
-      course_name: settingsCourse,
-      duration_min: settingsDuration,
-      flag_threshold_s: settingsThreshold,
-      shuffle: settingsShuffle,
-    });
-    qc.invalidateQueries({ queryKey: ["exam", examId] });
-    qc.invalidateQueries({ queryKey: ["exams"] });
-    showToast("Assessment configuration and proctoring parameters saved.");
+    if (isSavingSettings) return;
+    setIsSavingSettings(true);
+    try {
+      await api(`/exams/${examId}`, {
+        method: "PATCH",
+        body: {
+          title: settingsTitle.trim(),
+          duration_min: settingsDuration,
+          flag_threshold_s: settingsThreshold,
+          shuffle: settingsShuffle,
+          pass_pct: settingsPassPct,
+        },
+      });
+      await qc.invalidateQueries({ queryKey: ["exam", examId] });
+      qc.invalidateQueries({ queryKey: ["exams"] });
+      showToast("Assessment settings saved.");
+    } catch (err) {
+      showToast(`Settings were not saved: ${errorMessage(err)}`);
+    } finally {
+      setIsSavingSettings(false);
+    }
   };
 
   if (examQuery.isPending) {
@@ -1199,6 +1244,17 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
             <div className="flex items-center gap-2.5">
               <h2 className="text-lg font-bold tracking-tight text-text">{settingsTitle}</h2>
               <AssessmentStatusBadge status={assessmentStatus} />
+              {exam?.code && (
+                <button
+                  type="button"
+                  onClick={() => copyText(exam.code ?? "", "Assessment ID")}
+                  title="Copy Assessment ID"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-muted px-2 py-0.5 font-mono text-[11px] font-semibold text-muted hover:text-text"
+                >
+                  ID: {exam.code}
+                  <Copy className="size-3" aria-hidden />
+                </button>
+              )}
             </div>
             <p className="text-xs text-muted">
               {settingsCourse} • {questions.length} questions • {durationMinutes} min
@@ -1381,6 +1437,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   <AssessmentStatusBadge status={assessmentStatus} size="sm" />
                 </div>
                 <div className="flex justify-between border-b border-border pb-2">
+                  <span className="text-muted">Assessment ID</span>
+                  <span className="font-mono font-semibold text-text">{exam?.code ?? "—"}</span>
+                </div>
+                <div className="flex justify-between border-b border-border pb-2">
                   <span className="text-muted">Target Course</span>
                   <span className="font-semibold text-text">{settingsCourse}</span>
                 </div>
@@ -1484,7 +1544,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     size="sm"
                     onClick={() => setShowAiCopilot(!showAiCopilot)}
                     className={`gap-1.5 text-xs font-semibold shadow-2xs ${showAiCopilot
-                      ? "bg-ai-600 text-white hover:bg-ai-700"
+                      ? "bg-ai-700 text-white hover:bg-ai-700/90"
                       : "text-ai-700 hover:bg-ai-50"
                       }`}
                   >
@@ -1517,10 +1577,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
           {/* AI Question Copilot Agent Panel */}
           {showAiCopilot && (
-            <div className="rounded-2xl border border-ai-200/80 bg-linear-to-br from-ai-50/50 via-surface to-primary-50/30 p-5 shadow-2xs space-y-4 transition-all">
+            <div className="rounded-2xl border border-ai-100/80 bg-linear-to-br from-ai-50/50 via-surface to-primary-50/30 p-5 shadow-2xs space-y-4 transition-all">
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center border-b border-border/60 pb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="flex size-9 items-center justify-center rounded-xl bg-ai-600 text-white shadow-xs">
+                  <div className="flex size-9 items-center justify-center rounded-xl bg-ai-700 text-white shadow-xs">
                     <Bot className="size-5" />
                   </div>
                   <div>
@@ -1587,7 +1647,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <Button
                   onClick={() => handleRunAiCopilot()}
                   disabled={isCopilotGenerating}
-                  className="gap-1.5 bg-ai-600 font-semibold text-white shadow-xs hover:bg-ai-700 text-xs h-9 px-4"
+                  className="gap-1.5 bg-ai-700 font-semibold text-white shadow-xs hover:bg-ai-700/90 text-xs h-9 px-4"
                 >
                   {isCopilotGenerating ? (
                     <>
@@ -1620,7 +1680,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       setCopilotTopic(chip);
                       handleRunAiCopilot(chip);
                     }}
-                    className="rounded-lg border border-border/80 bg-surface/80 px-2.5 py-1 text-[11px] font-medium text-muted shadow-2xs hover:border-ai-400 hover:bg-ai-50/80 hover:text-ai-800 transition-colors"
+                    className="rounded-lg border border-border/80 bg-surface/80 px-2.5 py-1 text-[11px] font-medium text-muted shadow-2xs hover:border-ai-500 hover:bg-ai-50/80 hover:text-ai-700 transition-colors"
                   >
                     {chip}
                   </button>
@@ -1634,20 +1694,166 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     <span className="text-xs font-bold text-text">
                       Agent Recommended Questions ({copilotSuggestions.length})
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setCopilotSuggestions([])}
-                      className="text-[11px] font-medium text-muted hover:text-text"
-                    >
-                      Clear suggestions
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCopilotSuggestions([]);
+                          cancelEditSuggestion();
+                        }}
+                        className="text-[11px] font-medium text-muted hover:text-text"
+                      >
+                        Clear suggestions
+                      </button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={addingSuggestionIds.size > 0 || editingSuggestionId !== null}
+                        title={editingSuggestionId ? "Finish or cancel the open edit first" : undefined}
+                        onClick={() => addSuggestionsToAssessment(copilotSuggestions)}
+                        className="gap-1 bg-primary-600 font-semibold text-white hover:bg-primary-700 text-[11px] h-7 disabled:opacity-60"
+                      >
+                        <CheckCircle2 className="size-3.5" />
+                        <span>Use All ({copilotSuggestions.length})</span>
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {copilotSuggestions.map((sug) => (
+                    {copilotSuggestions.map((sug) => {
+                      const isAdding = addingSuggestionIds.has(sug.id);
+                      if (editingSuggestionId === sug.id && suggestionDraft) {
+                        const d = suggestionDraft;
+                        const setDraft = (patch: Partial<AIQuestionSuggestion>) => {
+                          setSuggestionDraft({ ...d, ...patch });
+                          setSuggestionDraftError(null);
+                        };
+                        return (
+                          <div
+                            key={sug.id}
+                            className="flex flex-col gap-3 rounded-xl border-2 border-primary-500 bg-surface p-4 shadow-xs"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="rounded-md bg-primary-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary-700">
+                                Editing · {d.topic}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  aria-label="Difficulty"
+                                  value={d.difficulty}
+                                  onChange={(e) => setDraft({ difficulty: +e.target.value })}
+                                  className="h-7 rounded-lg border border-border bg-surface px-2 text-[11px] text-text focus:border-primary-500 focus:outline-hidden"
+                                >
+                                  <option value={1}>Easy</option>
+                                  <option value={2}>Medium</option>
+                                  <option value={3}>Hard</option>
+                                </select>
+                                <input
+                                  aria-label="Marks"
+                                  type="number"
+                                  min={1}
+                                  max={100}
+                                  value={d.marks}
+                                  onChange={(e) => setDraft({ marks: +e.target.value })}
+                                  className="h-7 w-14 rounded-lg border border-border bg-surface px-2 text-[11px] text-text focus:border-primary-500 focus:outline-hidden"
+                                />
+                                <span className="text-[11px] text-muted">marks</span>
+                              </div>
+                            </div>
+
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-semibold text-text">Question</span>
+                              <textarea
+                                value={d.body}
+                                rows={3}
+                                onChange={(e) => setDraft({ body: e.target.value })}
+                                className="w-full resize-y rounded-lg border border-border bg-surface p-2 text-xs text-text focus:border-primary-500 focus:outline-hidden"
+                              />
+                            </label>
+
+                            <fieldset className="space-y-1.5">
+                              <legend className="mb-1 text-[11px] font-semibold text-text">
+                                Options <span className="font-normal text-muted">(select the correct answer)</span>
+                              </legend>
+                              {d.options.map((opt, idx) => (
+                                <div
+                                  key={opt.key}
+                                  className={`flex items-center gap-2 rounded-lg border p-1.5 ${opt.is_correct ? "border-success-500 bg-success-50" : "border-border"}`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`correct-${d.id}`}
+                                    aria-label={`Mark option ${opt.key} correct`}
+                                    checked={opt.is_correct}
+                                    onChange={() =>
+                                      setDraft({ options: d.options.map((o, i) => ({ ...o, is_correct: i === idx })) })
+                                    }
+                                    className="size-3.5 accent-primary-600"
+                                  />
+                                  <span className="font-mono text-[11px] font-bold text-muted">{opt.key}.</span>
+                                  <input
+                                    type="text"
+                                    value={opt.text}
+                                    aria-label={`Option ${opt.key}`}
+                                    onChange={(e) =>
+                                      setDraft({
+                                        options: d.options.map((o, i) => (i === idx ? { ...o, text: e.target.value } : o)),
+                                      })
+                                    }
+                                    className="h-7 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[11px] text-text hover:border-border focus:border-primary-500 focus:bg-surface focus:outline-hidden"
+                                  />
+                                </div>
+                              ))}
+                            </fieldset>
+
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-semibold text-text">Concept note (shown in candidate feedback)</span>
+                              <textarea
+                                value={d.explanation}
+                                rows={2}
+                                onChange={(e) => setDraft({ explanation: e.target.value })}
+                                className="w-full resize-y rounded-lg border border-border bg-surface p-2 text-[11px] text-text focus:border-primary-500 focus:outline-hidden"
+                              />
+                            </label>
+
+                            {suggestionDraftError && (
+                              <p role="alert" className="rounded-lg bg-danger-50 px-2 py-1.5 text-[11px] font-medium text-danger-700">
+                                {suggestionDraftError}
+                              </p>
+                            )}
+
+                            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-2.5">
+                              <Button type="button" variant="secondary" size="sm" onClick={cancelEditSuggestion} className="text-[11px] h-7">
+                                Cancel
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => saveSuggestionDraft(false)}
+                                className="gap-1 text-[11px] h-7"
+                              >
+                                <Check className="size-3.5" />
+                                <span>Save Changes</span>
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={isAdding}
+                                onClick={() => saveSuggestionDraft(true)}
+                                className="gap-1 bg-primary-600 font-semibold text-white hover:bg-primary-700 text-[11px] h-7 disabled:opacity-60"
+                              >
+                                {isAdding ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                <span>Save &amp; Use</span>
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
                       <div
                         key={sug.id}
-                        className="flex flex-col justify-between rounded-xl border border-ai-200 bg-surface p-4 shadow-2xs hover:border-ai-400 transition-all space-y-3"
+                        className="flex flex-col justify-between rounded-xl border border-ai-100 bg-surface p-4 shadow-2xs hover:border-ai-500 transition-all space-y-3"
                       >
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
@@ -1660,7 +1866,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                   ? "bg-success-50 text-success-700"
                                   : sug.difficulty === 2
                                     ? "bg-warning-50 text-warning-800"
-                                    : "bg-error-50 text-error-700"
+                                    : "bg-danger-50 text-danger-700"
                                   }`}
                               >
                                 {sug.difficulty === 1 ? "Easy" : sug.difficulty === 2 ? "Medium" : "Hard"}
@@ -1712,28 +1918,31 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                             type="button"
                             variant="secondary"
                             size="sm"
-                            onClick={() => handleCustomizeAiQuestion(sug)}
+                            disabled={isAdding}
+                            onClick={() => startEditSuggestion(sug)}
                             className="gap-1 text-[11px] h-7"
                           >
                             <Pencil className="size-3" />
-                            <span>Edit in Form</span>
+                            <span>Edit</span>
                           </Button>
                           <Button
                             type="button"
                             size="sm"
+                            disabled={isAdding}
                             onClick={() => handleQuickAddAiQuestion(sug)}
-                            className="gap-1 bg-ai-600 font-semibold text-white hover:bg-ai-700 text-[11px] h-7"
+                            className="gap-1 bg-primary-600 font-semibold text-white hover:bg-primary-700 text-[11px] h-7 disabled:opacity-60"
                           >
-                            <Plus className="size-3.5" />
-                            <span>Add to Assessment</span>
+                            {isAdding ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                            <span>{isAdding ? "Adding..." : "Use Question"}</span>
                           </Button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
-                <div className="rounded-xl border border-dashed border-ai-200/60 bg-surface/50 p-4 text-center">
+                <div className="rounded-xl border border-dashed border-ai-100/60 bg-surface/50 p-4 text-center">
                   <p className="text-xs text-muted">
                     Click &ldquo;Recommend&rdquo; or select a topic above to let the AI Agent suggest questions for this assessment.
                   </p>
@@ -1766,13 +1975,13 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 <button
                   type="button"
                   onClick={handleOpenAddCustomQuestion}
-                  className="rounded-xl border border-ai-200 bg-ai-50/40 p-4 transition-all hover:border-ai-400 hover:shadow-xs group cursor-pointer"
+                  className="rounded-xl border border-ai-100 bg-ai-50/40 p-4 transition-all hover:border-ai-500 hover:shadow-xs group cursor-pointer"
                 >
                   <div className="flex size-9 items-center justify-center rounded-lg bg-ai-100 text-ai-700 mb-2.5 group-hover:scale-105 transition-transform">
                     <Sparkles className="size-4.5" />
                   </div>
                   <div className="font-bold text-xs text-ai-950">Add Question with AI</div>
-                  <p className="text-[11px] text-ai-800 leading-tight mt-1">
+                  <p className="text-[11px] text-ai-700 leading-tight mt-1">
                     AI recommendation and manual question creation.
                   </p>
                 </button>
@@ -2001,39 +2210,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     Candidate Roster Audit (Admin Read-Only)
                   </span>
                 ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => sendLinksMutation.mutate({ forceResend: false })}
-                      disabled={sendLinksMutation.isPending || assignments.length === 0}
-                      className="flex items-center gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700 h-8 text-xs cursor-pointer"
-                      title="Dispatch invitation emails to eligible candidates via Node.js Nodemailer service"
-                    >
-                      {sendLinksMutation.isPending ? (
-                        <RefreshCw className="size-3.5 animate-spin" />
-                      ) : (
-                        <Send className="size-3.5" />
-                      )}
-                      <span>{sendLinksMutation.isPending ? "Sending..." : "Send Invitations"}</span>
-                    </Button>
-
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => sendLinksMutation.mutate({ forceResend: true })}
-                      disabled={sendLinksMutation.isPending || assignments.length === 0}
-                      className="flex items-center gap-1 text-xs border-border shadow-2xs h-8 text-text hover:bg-surface-muted cursor-pointer"
-                      title="Force re-dispatch invitation emails to all enrolled candidates"
-                    >
-                      <RefreshCw className="size-3 text-muted" />
-                      <span>Resend All</span>
-                    </Button>
-
+                  <>
                     <Button
                       variant="secondary"
                       size="sm"
                       onClick={() => setCandidateExcelModalOpen(true)}
-                      className="flex items-center gap-1.5 text-xs border-border shadow-2xs text-text hover:bg-surface-muted h-8"
+                      className="flex items-center gap-1.5 text-xs border-border shadow-2xs text-text hover:bg-surface-muted"
                     >
                       <FileSpreadsheet className="size-3.5 text-success-600" />
                       <span>Import from Excel</span>
@@ -2042,12 +2224,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     <Button
                       size="sm"
                       onClick={() => setAddStudentModalOpen(true)}
-                      className="flex items-center gap-1.5 bg-neutral-900 font-semibold text-white shadow-xs hover:bg-neutral-800 h-8 text-xs"
+                      className="flex items-center gap-1.5 bg-primary-600 font-semibold text-white shadow-xs hover:bg-primary-700"
                     >
                       <Plus className="size-4" />
                       <span>Add candidate</span>
                     </Button>
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -2056,6 +2238,114 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
           {/* SUB-VIEW 1: CANDIDATE ROSTER */}
           {candidateSubView === "roster" && (
             <div className="space-y-4">
+              {/* Candidate login credentials: unique per candidate, delivered by email */}
+              <div className="flex items-start gap-2.5 rounded-xl border border-border bg-surface p-3.5 shadow-2xs">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-700">
+                  <KeyRound className="size-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-text">Candidate login credentials</p>
+                  <p className="text-[11px] text-muted">
+                    Each candidate gets their own username (from their name, shown under each name below) and their own
+                    unique password, sent in their invitation email. Passwords are never shown here. If a candidate lost
+                    the email, use <strong>Resend</strong>; if they changed their password and forgot it, they can use
+                    <strong> Forgot password</strong> on the login page.
+                  </p>
+                </div>
+              </div>
+
+              {/* LangGraph Assessment Invitation Agent & YOPmail Testing Banner */}
+              <div className="rounded-xl border border-primary-200 bg-primary-50/40 p-3.5 space-y-2.5 shadow-2xs">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-600 text-white shadow-2xs">
+                      <Mail className="size-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-text">LangGraph Assessment Invitation Agent</span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          yopmailTestMode ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {yopmailTestMode ? "YOPmail Test Mode Active" : "Production Delivery Mode"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted">
+                        {yopmailTestMode
+                          ? `In test mode, invitations route safely to ${yopmailTestRecipient}. Candidate identities and assignments are preserved.`
+                          : "Invitations dispatch directly to each enrolled candidate's registered email address."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-xs text-text cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={yopmailTestMode}
+                        onChange={(e) => setYopmailTestMode(e.target.checked)}
+                        className="rounded border-border text-primary-600 focus:ring-primary-500 size-3.5"
+                      />
+                      <span className="font-semibold">Test Mode</span>
+                    </label>
+
+                    {yopmailTestMode && (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="email"
+                          value={yopmailTestRecipient}
+                          onChange={(e) => setYopmailTestRecipient(e.target.value)}
+                          placeholder="test-inbox@yopmail.com"
+                          className="h-8 w-52 rounded-lg border border-border bg-white px-2.5 text-xs text-text shadow-2xs focus:border-primary-500"
+                          title="Override recipient inbox for testing invitations"
+                        />
+                        <a
+                          href={`https://yopmail.com?login=${(yopmailTestRecipient.split("@")[0] || "eduproctor-test").trim()}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2.5 py-1.5 text-[11px] font-semibold text-text hover:bg-surface-muted shadow-2xs transition-colors"
+                          title="Open YOPmail inbox in new tab"
+                        >
+                          <span>Open YOPmail</span>
+                          <ExternalLink className="size-3 text-muted" />
+                        </a>
+                      </div>
+                    )}
+
+                    {!isLocationAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => sendLinksMutation.mutate({ forceResend: false })}
+                          disabled={sendLinksMutation.isPending || assignments.length === 0}
+                          className="gap-1.5 text-xs bg-primary-600 text-white hover:bg-primary-700 shadow-2xs h-8"
+                          title="Run LangGraph Agent to dispatch invitations to eligible candidates"
+                        >
+                          {sendLinksMutation.isPending ? (
+                            <RefreshCw className="size-3.5 animate-spin" />
+                          ) : (
+                            <Send className="size-3.5" />
+                          )}
+                          <span>{sendLinksMutation.isPending ? "Agent Running..." : "Send Invitations"}</span>
+                        </Button>
+
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => sendLinksMutation.mutate({ forceResend: true })}
+                          disabled={sendLinksMutation.isPending || assignments.length === 0}
+                          className="gap-1 text-xs shadow-2xs h-8"
+                          title="Force re-dispatch invitation emails to all enrolled candidates"
+                        >
+                          <RefreshCw className="size-3 text-muted" />
+                          <span>Resend All</span>
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Search and Status Filters */}
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                 <div className="relative w-full sm:w-72">
@@ -2150,17 +2440,31 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                 </div>
                                 <div>
                                   <div className="font-semibold text-xs text-text">{a.candidate_name}</div>
-                                  <div className="flex items-center gap-1 font-mono text-[11px] text-muted">
-                                    <Phone className="size-2.5 text-muted shrink-0" />
-                                    <span>{a.candidate_phone || "+91 98765 43210"}</span>
-                                  </div>
+                                  {a.candidate_username && (
+                                    <div className="font-mono text-[11px] text-primary-700" title="Login username">
+                                      @{a.candidate_username}
+                                    </div>
+                                  )}
+                                  {a.candidate_phone && (
+                                    <div className="flex items-center gap-1 font-mono text-[11px] text-muted">
+                                      <Phone className="size-2.5 text-muted shrink-0" />
+                                      <span>{a.candidate_phone}</span>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </TD>
 
                             {/* Registered Email */}
                             <TD>
-                              <div className="font-mono text-xs text-text">{a.candidate_email}</div>
+                              <div className="space-y-0.5">
+                                <div className="font-mono text-xs text-text">{a.candidate_email}</div>
+                                {yopmailTestMode && (
+                                  <div className="text-[10px] text-primary-700 font-mono">
+                                    → Routed to: {yopmailTestRecipient}
+                                  </div>
+                                )}
+                              </div>
                             </TD>
 
                             {/* Invitation Status */}
@@ -2217,7 +2521,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                 {(a.flags ?? 0) > 0 && (
                                   <div>
                                     <Badge tone="warning" className="text-[10px] py-0">
-                                      {a.flags} flag{a.flags > 1 ? "s" : ""}
+                                      {a.flags} flag{(a.flags ?? 0) > 1 ? "s" : ""}
                                     </Badge>
                                   </div>
                                 )}
@@ -2276,11 +2580,10 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                                 <Button
                                   variant="secondary"
                                   size="sm"
-                                  onClick={() => setTimelineCandidate(a)}
-                                  className="gap-1 text-[11px] font-semibold text-primary-700 hover:text-primary-800 h-7 px-2 cursor-pointer"
-                                  title="View complete invitation & examination lifecycle timeline"
+                                  onClick={() => setActiveTab("proctoring")}
+                                  className="gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-800 h-8"
                                 >
-                                  <Eye className="size-3" />
+                                  <Eye className="size-3.5" />
                                   <span>Timeline</span>
                                 </Button>
 
@@ -2465,12 +2768,15 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 />
               </div>
 
-              {/* Course name with recommendation input */}
-              <CoursePicker
-                value={settingsCourse}
-                onChange={setSettingsCourse}
-                label="Target Course (type or pick from recommendations)"
-              />
+              {/* Course is fixed after creation: the assessment's questions belong to this course. */}
+              <div>
+                <Label htmlFor="set-course">Target Course</Label>
+                <Input id="set-course" value={settingsCourse} readOnly disabled />
+                <p className="mt-1 text-[11px] text-muted">
+                  The course can't be changed after creation because the questions belong to it. Create a new
+                  assessment for a different course.
+                </p>
+              </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -2533,8 +2839,12 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
               </label>
 
               <div className="flex justify-end border-t border-border pt-4">
-                <Button type="submit" className="bg-primary-600 font-semibold text-white hover:bg-primary-700">
-                  Save Assessment Settings
+                <Button
+                  type="submit"
+                  disabled={isSavingSettings}
+                  className="bg-primary-600 font-semibold text-white hover:bg-primary-700 disabled:opacity-60"
+                >
+                  {isSavingSettings ? "Saving..." : "Save Assessment Settings"}
                 </Button>
               </div>
             </form>
@@ -2695,20 +3005,20 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
             {/* 2. AI Question Recommendation Agent Section */}
             {!editingQuestionId && (
-              <div className="space-y-3 rounded-xl border border-ai-200 bg-ai-50/40 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ai-200/60 pb-2.5">
+              <div className="space-y-3 rounded-xl border border-ai-100 bg-ai-50/40 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ai-100/60 pb-2.5">
                   <div className="flex items-center gap-2">
-                    <div className="flex size-6 items-center justify-center rounded-lg bg-ai-600 text-white shadow-2xs">
+                    <div className="flex size-6 items-center justify-center rounded-lg bg-ai-700 text-white shadow-2xs">
                       <Bot className="size-3.5" />
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-ai-900 flex items-center gap-1.5">
+                      <h4 className="text-xs font-bold text-ai-700 flex items-center gap-1.5">
                         <span>AI Recommended Questions</span>
                         <span className="font-normal text-[11px] text-ai-700">
                           (Topic: <strong>{customTopic}</strong>)
                         </span>
                       </h4>
-                      <p className="text-[11px] text-ai-600">
+                      <p className="text-[11px] text-ai-700">
                         {isInModalAiLoading
                           ? "Agent analyzing syllabus & generating non-repeating recommendations..."
                           : inModalAiRecs.length > 0
@@ -2721,7 +3031,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                   <div className="flex items-center gap-1.5">
                     {isInModalAiLoading && (
                       <span className="text-[11px] text-ai-700 flex items-center gap-1 font-medium pr-1">
-                        <RefreshCw className="size-3 animate-spin text-ai-600" />
+                        <RefreshCw className="size-3 animate-spin text-ai-700" />
                         Generating...
                       </span>
                     )}
@@ -2729,7 +3039,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                       type="button"
                       disabled={isInModalAiLoading || !customTopic.trim()}
                       onClick={handleManualTriggerRecommendations}
-                      className="inline-flex items-center gap-1 rounded-lg border border-ai-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-ai-700 shadow-2xs hover:bg-ai-100 disabled:opacity-50 transition-colors"
+                      className="inline-flex items-center gap-1 rounded-lg border border-ai-500 bg-white px-2.5 py-1 text-[11px] font-semibold text-ai-700 shadow-2xs hover:bg-ai-100 disabled:opacity-50 transition-colors"
                       title="Generate a fresh set of 3 questions"
                     >
                       <RefreshCw className="size-3" />
@@ -2750,16 +3060,16 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     {inModalAiRecs.map((rec, idx) => (
                       <div
                         key={rec.id}
-                        className="rounded-xl border border-ai-200 bg-white p-3.5 shadow-2xs transition-all hover:border-ai-400 hover:shadow-xs space-y-2.5"
+                        className="rounded-xl border border-ai-100 bg-white p-3.5 shadow-2xs transition-all hover:border-ai-500 hover:shadow-xs space-y-2.5"
                       >
                         {/* Card Header */}
                         <div className="flex items-center justify-between border-b border-ai-100 pb-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-md bg-ai-100 px-2 py-0.5 font-mono text-[11px] font-bold text-ai-800">
+                            <span className="rounded-md bg-ai-100 px-2 py-0.5 font-mono text-[11px] font-bold text-ai-700">
                               Q{idx + 1} · {rec.id.slice(0, 12)}
                             </span>
                             <Badge
-                              tone={rec.difficulty === 1 ? "success" : rec.difficulty === 2 ? "warning" : "error"}
+                              tone={rec.difficulty === 1 ? "success" : rec.difficulty === 2 ? "warning" : "danger"}
                               className="text-[10px] font-medium"
                             >
                               {difficultyLabel[rec.difficulty]}
@@ -2833,7 +3143,7 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
 
                         {/* Concept Note */}
                         {rec.explanation && (
-                          <div className="rounded-lg border border-ai-200/80 bg-ai-50/60 px-2.5 py-1.5 text-[11px] text-ai-800">
+                          <div className="rounded-lg border border-ai-100/80 bg-ai-50/60 px-2.5 py-1.5 text-[11px] text-ai-700">
                             <strong>Concept Note:</strong> {rec.explanation}
                           </div>
                         )}
@@ -3230,7 +3540,11 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                     onChange={(e) => setCandAutoSend(e.target.checked)}
                     className="size-4 rounded accent-primary-600"
                   />
-                  <span>Dispatch secure test link and webcam instructions to candidate upon enrollment</span>
+                  <span>
+                    {isPublished
+                      ? "Email the secure assessment link to this candidate now (assessment is already published)"
+                      : "Assessment link will be emailed automatically when you publish the assessment"}
+                  </span>
                 </label>
               </div>
 
@@ -3624,161 +3938,6 @@ export function AssessmentWorkspace({ initialTab = "overview" }: AssessmentWorks
                 </Button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* 8. Candidate Invitation & Examination Lifecycle Timeline Modal */}
-      {timelineCandidate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs">
-          <div className="w-full max-w-xl rounded-2xl border border-border bg-surface p-6 shadow-2xl space-y-5 animate-in fade-in-0 zoom-in-95">
-            <div className="flex items-start justify-between border-b border-border pb-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-bold text-text">Candidate Lifecycle Timeline</h3>
-                  <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold text-primary-800">
-                    {timelineCandidate.candidate_name}
-                  </span>
-                </div>
-                <p className="text-xs text-muted">
-                  Audit tracking for registered email: <span className="font-mono text-text">{timelineCandidate.candidate_email}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTimelineCandidate(null)}
-                className="rounded-lg p-1.5 text-muted hover:bg-surface-muted hover:text-text cursor-pointer"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            {/* Status Overview */}
-            <div className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-surface-muted/30 p-3 text-center">
-              <div>
-                <span className="block text-[10px] text-muted uppercase font-bold tracking-wider">Invitation</span>
-                <span className="font-semibold text-xs text-text">{timelineCandidate.invitation_status || "Pending"}</span>
-              </div>
-              <div>
-                <span className="block text-[10px] text-muted uppercase font-bold tracking-wider">Verification</span>
-                <span className="font-semibold text-xs text-text">
-                  {timelineCandidate.link_used_at ? "Completed / Verified" : "Awaiting Candidate"}
-                </span>
-              </div>
-              <div>
-                <span className="block text-[10px] text-muted uppercase font-bold tracking-wider">Exam Progress</span>
-                <span className="font-semibold text-xs text-text">
-                  {timelineCandidate.status || "Not Started"}
-                </span>
-              </div>
-            </div>
-
-            {/* Step-by-Step Lifecycle (6 Milestones) */}
-            <div className="space-y-3.5 relative pl-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-border">
-              {/* 1. Email Submission */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.link_sent_at ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  1
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">1. Email Dispatched</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.link_sent_at ? new Date(timelineCandidate.link_sent_at).toLocaleString() : "Pending"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  {timelineCandidate.link_sent_at
-                    ? "Invitation token generated and email dispatched via Node.js Nodemailer service."
-                    : "Invitation queued; awaiting mentor dispatch."}
-                </p>
-              </div>
-
-              {/* 2. Delivery Confirmation */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.delivery_status || timelineCandidate.invitation_status === "Delivered" || timelineCandidate.invitation_status === "Sent" ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  2
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">2. MTA Delivery Confirmation</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.link_sent_at ? "Confirmed (250 2.0.0 Ok: queued)" : "Pending"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  SMTP server accepted envelope for delivery to destination inbox.
-                </p>
-              </div>
-
-              {/* 3. Link Redemption */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.link_used_at ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  3
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">3. Candidate Link Redemption</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.link_used_at ? new Date(timelineCandidate.link_used_at).toLocaleString() : "Not clicked yet"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  Candidate accessed assessment URL and single-use cryptographic token verified.
-                </p>
-              </div>
-
-              {/* 4. Biometric Face Verification */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.link_used_at ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  4
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">4. Biometric Face Verification</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.link_used_at ? "Pre-checks verified" : "Pending"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  Webcam authorized, 3 reference photos captured, dynamic liveness check & calibration passed.
-                </p>
-              </div>
-
-              {/* 5. Examination Started */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.status === "In progress" || timelineCandidate.status === "Completed" ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  5
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">5. Examination Started</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.status === "In progress" || timelineCandidate.status === "Completed" ? "In Progress" : "Awaiting candidate"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  Questions loaded, realtime AI gaze/face tracking active, exam countdown timer running.
-                </p>
-              </div>
-
-              {/* 6. Examination Completed */}
-              <div className="relative space-y-0.5">
-                <div className={`absolute -left-6 top-0.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ${timelineCandidate.status === "Completed" ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-600"}`}>
-                  6
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-text">6. Examination Completed</span>
-                  <span className="text-[11px] font-mono text-muted">
-                    {timelineCandidate.status === "Completed" ? "Completed" : "Not finished"}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted">
-                  Candidate submitted answers; auto-grading and proctoring integrity report compiled.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-border">
-              <Button size="sm" variant="secondary" onClick={() => setTimelineCandidate(null)}>
-                Close Timeline
-              </Button>
-            </div>
           </div>
         </div>
       )}

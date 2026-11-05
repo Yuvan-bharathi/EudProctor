@@ -14,6 +14,11 @@ PUBLIC_ROUTES = {
     ("GET", "/api/v1/health"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/refresh"),
+    ("POST", "/api/v1/auth/forgot-password"),
+    ("POST", "/api/v1/auth/reset-password"),
+    # invitation link landing: the emailed single-use token is the credential
+    ("GET", "/api/v1/invite/{token}"),
+    ("POST", "/api/v1/invite/{token}/accept"),
 }
 
 

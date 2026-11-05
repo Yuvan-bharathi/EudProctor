@@ -184,7 +184,7 @@ def submit_session(
 
 @router.get("/candidates/me/assessments", response_model=list[MyAssessment])
 def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate_only)):
-    """Newest first: latest scheduled start, then most recently assigned. One query (no per-row lookups)."""
+    """Most recently scheduled first (latest invitation sent, else enrolment time). One query."""
     q_counts = (
         select(ExamQuestion.exam_id, func.count().label("n")).group_by(ExamQuestion.exam_id).subquery()
     )
@@ -199,6 +199,7 @@ def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate
             ExamSession.id,
             ExamSession.status,
             func.coalesce(q_counts.c.n, 0),
+            func.coalesce(ExamAssignment.link_sent_at, ExamAssignment.created_at).label("scheduled_at"),
         )
         .select_from(ExamAssignment)
         .join(Exam, Exam.id == ExamAssignment.exam_id)
@@ -206,7 +207,8 @@ def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate
         .outerjoin(ExamSession, ExamSession.assignment_id == ExamAssignment.id)
         .outerjoin(q_counts, q_counts.c.exam_id == Exam.id)
         .where(ExamAssignment.candidate_id == user.id)
-        .order_by(Exam.window_start.desc(), ExamAssignment.created_at.desc())
+        .order_by(func.coalesce(ExamAssignment.link_sent_at, ExamAssignment.created_at).desc(),
+                  Exam.window_start.desc())
     )
     return [
         MyAssessment(
@@ -219,6 +221,8 @@ def my_assessments(db: Session = Depends(get_db), user: User = Depends(candidate
             session_status=session_status,
             course_name=course_name or "Full Stack Development",
             questions_count=n,
+            scheduled_at=scheduled_at,
         )
-        for exam_id, title, duration_min, window_start, window_end, course_name, session_id, session_status, n in rows
+        for (exam_id, title, duration_min, window_start, window_end, course_name, session_id, session_status, n,
+             scheduled_at) in rows
     ]

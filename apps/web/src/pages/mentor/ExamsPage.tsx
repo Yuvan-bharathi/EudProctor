@@ -125,7 +125,7 @@ export function ExamsPage() {
     },
     onSuccess: (exam) => {
       qc.invalidateQueries({ queryKey: ["exams"] });
-      showToast("Assessment created successfully!");
+      showToast(exam.code ? `Assessment created · ID ${exam.code}` : "Assessment created successfully!");
       setModalOpen(false);
       navigate(`${baseExamPath}/${exam.id}`);
     },
@@ -152,6 +152,7 @@ export function ExamsPage() {
 
     return {
       id: e.id,
+      code: e.code ?? null,
       title: e.title,
       course: courseName,
       status: mappedStatus,
@@ -261,6 +262,12 @@ export function ExamsPage() {
                     </Link>
 
                     <AssessmentStatusBadge status={item.status} />
+
+                    {item.code && (
+                      <span className="rounded-md border border-border bg-surface-muted px-2 py-0.5 font-mono text-[11px] font-semibold text-muted">
+                        ID: {item.code}
+                      </span>
+                    )}
 
                     {item.targetRole && (
                       <span className="rounded-md bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-800 border border-primary-200/60">

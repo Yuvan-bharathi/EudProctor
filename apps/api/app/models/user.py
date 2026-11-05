@@ -25,8 +25,13 @@ class User(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     role: Mapped[Role] = mapped_column(str_enum(Role))
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    # Login name for candidates, derived from their name at enrolment (lower-case, unique).
+    username: Mapped[str | None] = mapped_column(String(80), unique=True, index=True, default=None)
     name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(255), info={"audit": False})
+    # Encrypted copy of the system-issued candidate password, so re-sent invitations can include it.
+    # Ignored once the candidate changes their password (it then no longer verifies).
+    issued_password_enc: Mapped[str | None] = mapped_column(String(255), default=None, info={"audit": False})
     is_active: Mapped[bool] = mapped_column(default=True)
     consent_version: Mapped[str | None] = mapped_column(String(20), default=None)
     consent_at: Mapped[datetime | None] = mapped_column(default=None)

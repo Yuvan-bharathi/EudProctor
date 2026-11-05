@@ -6,6 +6,7 @@ export interface User {
   id: string;
   role: Role;
   email: string;
+  username?: string | null;
   name: string;
   is_active: boolean;
 }

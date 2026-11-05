@@ -16,11 +16,19 @@ class LLM(Protocol):
     def create(self, **kwargs: Any) -> Any: ...
 
 
-class AnthropicLLM:
-    def __init__(self, api_key: str, model: str):
-        import anthropic
+def make_anthropic_client(api_key: str, base_url: str = "") -> Any:
+    """Anthropic SDK client, direct or through an Anthropic-compatible gateway such as OpenRouter."""
+    import anthropic
 
-        self._client = anthropic.Anthropic(api_key=api_key)
+    if base_url:
+        # Gateways like OpenRouter authenticate with "Authorization: Bearer <key>", not x-api-key.
+        return anthropic.Anthropic(base_url=base_url.rstrip("/"), auth_token=api_key, api_key=None)
+    return anthropic.Anthropic(api_key=api_key)
+
+
+class AnthropicLLM:
+    def __init__(self, api_key: str, model: str, base_url: str = ""):
+        self._client = make_anthropic_client(api_key, base_url)
         self.model = model
 
     def create(self, **kwargs: Any) -> Any:
@@ -39,7 +47,7 @@ def _default_factory() -> LLM:
         raise AgentUnavailable(
             "AI agent is not configured: set ANTHROPIC_API_KEY and ANTHROPIC_MODEL in .env"
         )
-    return AnthropicLLM(s.anthropic_api_key, s.anthropic_model)
+    return AnthropicLLM(s.anthropic_api_key, s.anthropic_model, s.anthropic_base_url)
 
 
 _factory: Callable[[], LLM] = _default_factory

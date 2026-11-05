@@ -41,8 +41,8 @@ const interviewNav: Record<Role, NavItem[]> = {
 const internshipNav: Record<Role, NavItem[]> = {
   mentor: [
     { to: "/mentor/internship", label: "Intern Hub (Overview)", icon: Home },
-    { to: "/mentor/internship/mentees", label: "My Mentees (Max 2)", icon: Users },
-    { to: "/mentor/internship/coding", label: "Coding IDE & Reviews", icon: Code2 },
+    { to: "/mentor/internship/mentees", label: "My Interns", icon: Users },
+    { to: "/mentor/internship/coding", label: "AI Approval Inbox", icon: Code2 },
     { to: "/mentor/internship/tasks", label: "Tasks & Learning Plan", icon: CheckSquare },
     { to: "/mentor/internship/attendance", label: "Attendance & Leaves", icon: CalendarCheck2 },
     { to: "/mentor/internship/reviews", label: "Monthly Reviews (M1-M3)", icon: Award },

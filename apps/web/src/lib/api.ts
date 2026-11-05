@@ -337,7 +337,22 @@ export async function api<T>(path: string, opts: RequestOptions = {}, retried = 
 
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
-    if (typeof err.detail === "string") return err.detail;
+    const d = err.detail;
+    if (typeof d === "string") return d;
+    // {message, ...} payloads, e.g. the secret-scan rejection on task submissions
+    if (d && typeof d === "object" && !Array.isArray(d) && typeof (d as { message?: unknown }).message === "string") {
+      return (d as { message: string }).message;
+    }
+    // FastAPI / Pydantic validation errors: [{loc: [...], msg: "..."}]
+    if (Array.isArray(d) && d.length > 0) {
+      return d
+        .map((e) => {
+          const item = e as { loc?: unknown[]; msg?: string };
+          const field = Array.isArray(item.loc) ? item.loc.filter((p) => p !== "body").join(".") : "";
+          return field ? `${field}: ${item.msg ?? "invalid value"}` : (item.msg ?? "invalid value");
+        })
+        .join("; ");
+    }
     return `Request failed (${err.status})`;
   }
   return "Network problem. Please try again.";
